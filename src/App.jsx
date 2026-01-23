@@ -904,16 +904,8 @@ const saveProjects = (userId, projects) => {
 const SUPABASE_URL = 'https://zokrapacoywipmmincuh.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpva3JhcGFjb3l3aXBtbWluY3VoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg5MjMwNTEsImV4cCI6MjA4NDQ5OTA1MX0.EEtrMG8L1yj-nyj7U0dy9g68zjhlE7qCc4m5866n48Y';
 
-// Initialize Supabase client with session persistence
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    persistSession: true,
-    storageKey: 'eblat-auth',
-    storage: window.localStorage,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  }
-});
+// Initialize Supabase client
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Check if user is admin - any @e-blat.com email is admin
 const isAdminEmail = (email) => {
@@ -959,14 +951,18 @@ function AuthProvider({ children }) {
   useEffect(() => {
     // Timeout to prevent infinite loading
     const timeout = setTimeout(() => {
+      console.log('Session timeout - no session found');
       setLoading(false);
     }, 5000);
 
     // Get initial session
+    console.log('Checking for existing session...');
     supabase.auth.getSession()
       .then(async ({ data: { session } }) => {
         clearTimeout(timeout);
+        console.log('Session check result:', session ? 'Found session' : 'No session');
         if (session?.user) {
+          console.log('User found:', session.user.email);
           const profile = await fetchProfile(session.user.id);
           setUser(transformUser(session.user, profile));
         }
@@ -980,6 +976,7 @@ function AuthProvider({ children }) {
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('Auth state changed:', event, session?.user?.email);
       if (session?.user) {
         const profile = await fetchProfile(session.user.id);
         setUser(transformUser(session.user, profile));
@@ -995,23 +992,29 @@ function AuthProvider({ children }) {
   }, []);
 
   const signIn = async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    
-    if (error) {
-      return { user: null, error: error.message };
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      
+      if (error) {
+        console.error('Login error:', error);
+        return { user: null, error: error.message };
+      }
+      
+      if (data.user) {
+        const profile = await fetchProfile(data.user.id);
+        const appUser = transformUser(data.user, profile);
+        setUser(appUser);
+        return { user: appUser, error: null };
+      }
+      
+      return { user: null, error: 'Eroare la autentificare' };
+    } catch (err) {
+      console.error('Login exception:', err);
+      return { user: null, error: err.message };
     }
-    
-    if (data.user) {
-      const profile = await fetchProfile(data.user.id);
-      const appUser = transformUser(data.user, profile);
-      setUser(appUser);
-      return { user: appUser, error: null };
-    }
-    
-    return { user: null, error: 'Eroare la autentificare' };
   };
 
   const signUp = async (email, password, name) => {
