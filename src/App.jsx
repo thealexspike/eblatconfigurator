@@ -904,8 +904,16 @@ const saveProjects = (userId, projects) => {
 const SUPABASE_URL = 'https://zokrapacoywipmmincuh.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_r_Tj-dSDpb5c_K7pcxcYXA_QNlGjMzw';
 
-// Initialize Supabase client
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Initialize Supabase client with session persistence
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    persistSession: true,
+    storageKey: 'eblat-auth',
+    storage: window.localStorage,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  }
+});
 
 // Check if user is admin - any @e-blat.com email is admin
 const isAdminEmail = (email) => {
