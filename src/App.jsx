@@ -978,8 +978,19 @@ function AuthProvider({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log('Auth state changed:', event, session?.user?.email);
       if (session?.user) {
-        const profile = await fetchProfile(session.user.id);
-        setUser(transformUser(session.user, profile));
+        console.log('Setting user from auth change...');
+        // Set user immediately without waiting for profile
+        const basicUser = transformUser(session.user, null);
+        setUser(basicUser);
+        setLoading(false);
+        clearTimeout(timeout);
+        
+        // Then fetch profile in background
+        fetchProfile(session.user.id).then(profile => {
+          if (profile) {
+            setUser(transformUser(session.user, profile));
+          }
+        });
       } else {
         setUser(null);
       }
