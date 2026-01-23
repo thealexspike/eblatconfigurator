@@ -902,7 +902,7 @@ const saveProjects = (userId, projects) => {
 
 // Supabase configuration
 const SUPABASE_URL = 'https://zokrapacoywipmmincuh.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_r_Tj-dSDpb5c_K7pcxcYXA_QNlGjMzw';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpva3JhcGFjb3l3aXBtbWluY3VoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg5MjMwNTEsImV4cCI6MjA4NDQ5OTA1MX0.EEtrMG8L1yj-nyj7U0dy9g68zjhlE7qCc4m5866n48Y';
 
 // Initialize Supabase client with session persistence
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
