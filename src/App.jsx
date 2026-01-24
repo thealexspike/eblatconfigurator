@@ -2409,6 +2409,7 @@ function Configurator({ project, onBack }) {
   // State declarations
   const [library, setLibrary] = useState(loadLibrary);
   const [elements, setElementsInternal] = useState(project?.elements || []);
+  const [groups, setGroups] = useState(project?.groups || {}); // Group parent transforms
   const [undoHistory, setUndoHistory] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]); // Multi-select support
   const [tool, setTool] = useState('select');
@@ -2422,6 +2423,29 @@ function Configurator({ project, onBack }) {
   // Helper for single selection (backward compatibility)
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const setSelectedId = (id) => setSelectedIds(id ? [id] : []);
+  
+  // Helper functions for group transforms
+  const getWorldPosition = (el) => {
+    if (!el.groupId || !groups[el.groupId]) {
+      return el.position || { x: 0, z: 0 };
+    }
+    const group = groups[el.groupId];
+    const groupRot = (group.rotation || 0) * Math.PI / 180;
+    const localX = el.localOffset?.x || 0;
+    const localZ = el.localOffset?.z || 0;
+    // Rotate local offset by group rotation and add group position
+    return {
+      x: (group.position?.x || 0) + localX * Math.cos(groupRot) - localZ * Math.sin(groupRot),
+      z: (group.position?.z || 0) + localX * Math.sin(groupRot) + localZ * Math.cos(groupRot)
+    };
+  };
+  
+  const getWorldRotation = (el) => {
+    if (!el.groupId || !groups[el.groupId]) {
+      return el.rotation || 0;
+    }
+    return (el.localRotation || 0) + (groups[el.groupId].rotation || 0);
+  };
   
   // Load library from Supabase
   useEffect(() => {
@@ -2548,7 +2572,8 @@ function Configurator({ project, onBack }) {
         const { error } = await supabase
           .from('projects')
           .update({ 
-            elements, 
+            elements,
+            groups, // Save groups too
             updated_at: new Date().toISOString() 
           })
           .eq('id', project.id);
@@ -2558,7 +2583,7 @@ function Configurator({ project, onBack }) {
       } catch (err) {
         console.error('Error saving project:', err);
         // Fallback to localStorage
-        const updatedProject = { ...project, elements, updated_at: new Date().toISOString() };
+        const updatedProject = { ...project, elements, groups, updated_at: new Date().toISOString() };
         const projects = loadProjects(user.id);
         const updated = projects.map(p => p.id === project.id ? updatedProject : p);
         saveProjects(user.id, updated);
@@ -2573,7 +2598,7 @@ function Configurator({ project, onBack }) {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [elements, project, user]);
+  }, [elements, groups, project, user]);
 
   // Expose functions to window for 3D interaction
   useEffect(() => {
@@ -2585,227 +2610,282 @@ function Configurator({ project, onBack }) {
     
     window.getCurrentTool = () => tool;
     
-    // Store pending position updates during drag (for performance)
-    let pendingPositions = {};  // Snapped positions (for display)
-    let rawPositions = {};      // Raw positions (for snap calculation)
+    // Store pending transforms during drag (for performance)
+    let pendingGroupTransforms = {}; // { groupId: { position: {x,z}, rotation } }
+    let pendingElementTransforms = {}; // { elementId: { position: {x,z}, rotation } } for ungrouped elements
+    let rawPositions = {};
+    let rawRotations = {};
     
-    // Helper to move a single element
-    const moveSingleElement = (id, delta, isMainElement = false) => {
-      const mesh = meshesRef.current[id];
-      const el = elements.find(e => e.id === id);
-      if (!mesh || !el) return;
+    // Get the groupId if all selected elements are in the same group
+    const getSelectedGroupId = () => {
+      const selectedEls = elements.filter(e => selectedIds.includes(e.id));
+      if (selectedEls.length === 0) return null;
       
-      // Calculate raw position (without snap) for accurate snap detection
-      const baseX = rawPositions[id]?.x ?? el.position?.x ?? 0;
-      const baseZ = rawPositions[id]?.z ?? el.position?.z ?? 0;
-      let rawX = baseX + delta.x;
-      let rawZ = baseZ + delta.z;
-      
-      // Store raw position
-      rawPositions[id] = { x: rawX, z: rawZ };
-      
-      let newX = rawX;
-      let newZ = rawZ;
-      
-      // Only apply snap for the main (dragged) element
-      if (isMainElement && snapEnabled) {
-        const SNAP_THRESHOLD = 0.10;
-        const elRotation = (pendingPositions[id]?.rotation ?? el.rotation ?? 0) % 360;
-        const isRotated90 = Math.abs(elRotation % 180 - 90) < 5;
-        
-        let movingWidth, movingDepth;
-        if (el.type === 'backsplash') {
-          movingWidth = el.length / 100;
-          movingDepth = (el.thickness || 12) / 1000;
-        } else {
-          movingWidth = el.length / 100;
-          movingDepth = el.depth / 100;
+      const groupIds = new Set(selectedEls.map(e => e.groupId).filter(Boolean));
+      // If all selected elements are in the same group, return that group
+      if (groupIds.size === 1) {
+        const groupId = [...groupIds][0];
+        // Check if ALL elements in the group are selected
+        const groupElements = elements.filter(e => e.groupId === groupId);
+        if (groupElements.every(e => selectedIds.includes(e.id))) {
+          return groupId;
         }
-        
-        if (isRotated90) {
-          [movingWidth, movingDepth] = [movingDepth, movingWidth];
-        }
-        
-        const movingLeft = newX - movingWidth / 2;
-        const movingRight = newX + movingWidth / 2;
-        const movingFront = newZ - movingDepth / 2;
-        const movingBack = newZ + movingDepth / 2;
-        
-        let snapX = null, snapZ = null;
-        
-        // Check snap against non-selected elements only
-        elements.forEach(other => {
-          if (other.id === id || selectedIds.includes(other.id)) return;
-          
-          const otherX = pendingPositions[other.id]?.x ?? other.position?.x ?? 0;
-          const otherZ = pendingPositions[other.id]?.z ?? other.position?.z ?? 0;
-          const otherRotation = (pendingPositions[other.id]?.rotation ?? other.rotation ?? 0) % 360;
-          const otherIsRotated90 = Math.abs(otherRotation % 180 - 90) < 5;
-          
-          let otherWidth, otherDepth;
-          if (other.type === 'backsplash') {
-            otherWidth = other.length / 100;
-            otherDepth = (other.thickness || 12) / 1000;
-          } else {
-            otherWidth = other.length / 100;
-            otherDepth = other.depth / 100;
-          }
-          
-          if (otherIsRotated90) {
-            [otherWidth, otherDepth] = [otherDepth, otherWidth];
-          }
-          
-          const otherLeft = otherX - otherWidth / 2;
-          const otherRight = otherX + otherWidth / 2;
-          const otherFront = otherZ - otherDepth / 2;
-          const otherBack = otherZ + otherDepth / 2;
-          
-          // X snaps
-          if (Math.abs(movingRight - otherLeft) < SNAP_THRESHOLD && snapX === null) {
-            snapX = otherLeft - movingWidth / 2;
-          }
-          if (Math.abs(movingLeft - otherRight) < SNAP_THRESHOLD && snapX === null) {
-            snapX = otherRight + movingWidth / 2;
-          }
-          if (Math.abs(newX - otherX) < SNAP_THRESHOLD && snapX === null) {
-            snapX = otherX;
-          }
-          
-          // Z snaps  
-          if (Math.abs(movingBack - otherFront) < SNAP_THRESHOLD && snapZ === null) {
-            snapZ = otherFront - movingDepth / 2;
-          }
-          if (Math.abs(movingFront - otherBack) < SNAP_THRESHOLD && snapZ === null) {
-            snapZ = otherBack + movingDepth / 2;
-          }
-          if (Math.abs(newZ - otherZ) < SNAP_THRESHOLD && snapZ === null) {
-            snapZ = otherZ;
-          }
-        });
-        
-        if (snapX !== null) newX = snapX;
-        if (snapZ !== null) newZ = snapZ;
       }
-      
-      pendingPositions[id] = { ...(pendingPositions[id] || {}), x: newX, z: newZ };
-      mesh.position.x = newX;
-      mesh.position.z = newZ;
-      
-      return { snapDeltaX: newX - rawX, snapDeltaZ: newZ - rawZ };
+      return null;
+    };
+    
+    // Helper to get world position during drag (considering pending transforms)
+    const getWorldPosDuringDrag = (el) => {
+      if (el.groupId && groups[el.groupId]) {
+        const pendingGroup = pendingGroupTransforms[el.groupId];
+        const groupPos = pendingGroup?.position || groups[el.groupId].position || { x: 0, z: 0 };
+        const groupRot = ((pendingGroup?.rotation ?? groups[el.groupId].rotation) || 0) * Math.PI / 180;
+        const localX = el.localOffset?.x || 0;
+        const localZ = el.localOffset?.z || 0;
+        return {
+          x: groupPos.x + localX * Math.cos(groupRot) - localZ * Math.sin(groupRot),
+          z: groupPos.z + localX * Math.sin(groupRot) + localZ * Math.cos(groupRot)
+        };
+      }
+      return pendingElementTransforms[el.id]?.position || el.position || { x: 0, z: 0 };
+    };
+    
+    const getWorldRotDuringDrag = (el) => {
+      if (el.groupId && groups[el.groupId]) {
+        const pendingGroup = pendingGroupTransforms[el.groupId];
+        const groupRot = (pendingGroup?.rotation ?? groups[el.groupId].rotation) || 0;
+        return (el.localRotation || 0) + groupRot;
+      }
+      return pendingElementTransforms[el.id]?.rotation ?? el.rotation ?? 0;
     };
     
     window.moveElement = (id, delta) => {
-      // Move the main element and get snap adjustment
-      const snapDelta = moveSingleElement(id, delta, true) || { snapDeltaX: 0, snapDeltaZ: 0 };
+      const selectedGroupId = getSelectedGroupId();
       
-      // Move other selected elements with the same delta (including snap adjustment)
-      const adjustedDelta = {
-        x: delta.x + snapDelta.snapDeltaX,
-        z: delta.z + snapDelta.snapDeltaZ
-      };
-      
-      selectedIds.forEach(otherId => {
-        if (otherId !== id) {
-          moveSingleElement(otherId, adjustedDelta, false);
-        }
-      });
-    };
-    
-    // Track raw rotation for smooth dragging with snap
-    let rawRotations = {};
-    
-    window.rotateElement = (id, dx) => {
-      if (selectedIds.length <= 1) {
-        // Single element rotation
-        const mesh = meshesRef.current[id];
-        const el = elements.find(e => e.id === id);
-        if (!mesh || !el) return;
+      if (selectedGroupId && groups[selectedGroupId]) {
+        // Moving a group - just update group position
+        const group = groups[selectedGroupId];
+        const pending = pendingGroupTransforms[selectedGroupId] || { 
+          position: { ...group.position }, 
+          rotation: group.rotation 
+        };
         
-        // Accumulate raw rotation
-        const baseRotation = rawRotations[id] ?? pendingPositions[id]?.rotation ?? el.rotation ?? 0;
-        const rawRotation = baseRotation + dx * 0.5;
-        rawRotations[id] = rawRotation;
+        const baseX = rawPositions[selectedGroupId]?.x ?? pending.position.x;
+        const baseZ = rawPositions[selectedGroupId]?.z ?? pending.position.z;
+        let newX = baseX + delta.x;
+        let newZ = baseZ + delta.z;
         
-        // Apply snap for display
-        let displayRotation = rawRotation;
-        if (snapEnabled) {
-          displayRotation = Math.round(rawRotation / 45) * 45;
-        }
+        rawPositions[selectedGroupId] = { x: newX, z: newZ };
         
-        pendingPositions[id] = { ...(pendingPositions[id] || {}), rotation: displayRotation };
-        mesh.rotation.y = (displayRotation * Math.PI) / 180;
+        // TODO: Could add snap logic here for group center
+        
+        pendingGroupTransforms[selectedGroupId] = { 
+          ...pending, 
+          position: { x: newX, z: newZ } 
+        };
+        
+        // Update all group member meshes
+        elements.filter(e => e.groupId === selectedGroupId).forEach(el => {
+          const mesh = meshesRef.current[el.id];
+          if (!mesh) return;
+          
+          const worldPos = getWorldPosDuringDrag(el);
+          mesh.position.x = worldPos.x;
+          mesh.position.z = worldPos.z;
+        });
+        
       } else {
-        // Multi-element rotation around geometric center
-        const angleDelta = dx * 0.5;
-        
-        // Calculate center of selected elements
-        const selectedEls = elements.filter(e => selectedIds.includes(e.id));
-        const centerX = selectedEls.reduce((sum, e) => sum + (pendingPositions[e.id]?.x ?? e.position?.x ?? 0), 0) / selectedEls.length;
-        const centerZ = selectedEls.reduce((sum, e) => sum + (pendingPositions[e.id]?.z ?? e.position?.z ?? 0), 0) / selectedEls.length;
-        
-        const angleRad = (angleDelta * Math.PI) / 180;
-        
-        selectedIds.forEach(elId => {
+        // Moving ungrouped elements or mixed selection
+        selectedIds.forEach((elId, idx) => {
           const mesh = meshesRef.current[elId];
           const el = elements.find(e => e.id === elId);
-          if (!mesh || !el) return;
+          if (!mesh || !el || el.groupId) return; // Skip grouped elements
           
-          // Get current position
-          const px = (pendingPositions[elId]?.x ?? el.position?.x ?? 0) - centerX;
-          const pz = (pendingPositions[elId]?.z ?? el.position?.z ?? 0) - centerZ;
+          const pending = pendingElementTransforms[elId] || { 
+            position: { ...(el.position || { x: 0, z: 0 }) }, 
+            rotation: el.rotation || 0 
+          };
           
-          // Rotate around center
+          const baseX = rawPositions[elId]?.x ?? pending.position.x;
+          const baseZ = rawPositions[elId]?.z ?? pending.position.z;
+          let newX = baseX + delta.x;
+          let newZ = baseZ + delta.z;
+          
+          rawPositions[elId] = { x: newX, z: newZ };
+          
+          // Apply snap for first element only
+          if (idx === 0 && snapEnabled) {
+            const SNAP_THRESHOLD = 0.10;
+            elements.forEach(other => {
+              if (selectedIds.includes(other.id)) return;
+              const otherPos = getWorldPosDuringDrag(other);
+              if (Math.abs(newX - otherPos.x) < SNAP_THRESHOLD) newX = otherPos.x;
+              if (Math.abs(newZ - otherPos.z) < SNAP_THRESHOLD) newZ = otherPos.z;
+            });
+          }
+          
+          pendingElementTransforms[elId] = { ...pending, position: { x: newX, z: newZ } };
+          mesh.position.x = newX;
+          mesh.position.z = newZ;
+        });
+      }
+      
+      // Update gizmo position
+      if (window.updateGizmoPosition && selectedIds.length > 0) {
+        const selectedEls = elements.filter(e => selectedIds.includes(e.id));
+        const centerX = selectedEls.reduce((sum, e) => sum + getWorldPosDuringDrag(e).x, 0) / selectedEls.length;
+        const centerZ = selectedEls.reduce((sum, e) => sum + getWorldPosDuringDrag(e).z, 0) / selectedEls.length;
+        const avgY = selectedEls.reduce((sum, e) => {
+          const placementHeight = (e.placementHeight || 90) / 100;
+          const thickness = (e.thickness || 12) / 1000;
+          return sum + placementHeight + thickness;
+        }, 0) / selectedEls.length;
+        window.updateGizmoPosition(centerX, avgY, centerZ);
+      }
+    };
+    
+    window.rotateElement = (id, dx) => {
+      const selectedGroupId = getSelectedGroupId();
+      const angleDelta = dx * 0.5;
+      
+      if (selectedGroupId && groups[selectedGroupId]) {
+        // Rotating a group - just update group rotation
+        const group = groups[selectedGroupId];
+        const pending = pendingGroupTransforms[selectedGroupId] || { 
+          position: { ...group.position }, 
+          rotation: group.rotation || 0 
+        };
+        
+        const baseRot = rawRotations[selectedGroupId] ?? pending.rotation;
+        let newRot = baseRot + angleDelta;
+        
+        rawRotations[selectedGroupId] = newRot;
+        
+        // Apply snap
+        if (snapEnabled) {
+          newRot = Math.round(newRot / 5) * 5;
+        }
+        
+        pendingGroupTransforms[selectedGroupId] = { ...pending, rotation: newRot };
+        
+        // Update all group member meshes
+        elements.filter(e => e.groupId === selectedGroupId).forEach(el => {
+          const mesh = meshesRef.current[el.id];
+          if (!mesh) return;
+          
+          const worldPos = getWorldPosDuringDrag(el);
+          const worldRot = getWorldRotDuringDrag(el);
+          
+          mesh.position.x = worldPos.x;
+          mesh.position.z = worldPos.z;
+          mesh.rotation.y = worldRot * Math.PI / 180;
+        });
+        
+      } else if (selectedIds.length === 1) {
+        // Single ungrouped element rotation
+        const el = elements.find(e => e.id === id);
+        if (!el || el.groupId) return;
+        
+        const mesh = meshesRef.current[id];
+        if (!mesh) return;
+        
+        const pending = pendingElementTransforms[id] || { 
+          position: { ...(el.position || { x: 0, z: 0 }) }, 
+          rotation: el.rotation || 0 
+        };
+        
+        const baseRot = rawRotations[id] ?? pending.rotation;
+        let newRot = baseRot + angleDelta;
+        
+        rawRotations[id] = newRot;
+        
+        if (snapEnabled) {
+          newRot = Math.round(newRot / 5) * 5;
+        }
+        
+        pendingElementTransforms[id] = { ...pending, rotation: newRot };
+        mesh.rotation.y = newRot * Math.PI / 180;
+        
+      } else {
+        // Multiple ungrouped elements - rotate around center
+        const selectedEls = elements.filter(e => selectedIds.includes(e.id) && !e.groupId);
+        if (selectedEls.length === 0) return;
+        
+        const centerX = selectedEls.reduce((sum, e) => sum + getWorldPosDuringDrag(e).x, 0) / selectedEls.length;
+        const centerZ = selectedEls.reduce((sum, e) => sum + getWorldPosDuringDrag(e).z, 0) / selectedEls.length;
+        
+        const angleRad = angleDelta * Math.PI / 180;
+        
+        selectedEls.forEach(el => {
+          const mesh = meshesRef.current[el.id];
+          if (!mesh) return;
+          
+          const pending = pendingElementTransforms[el.id] || { 
+            position: { ...(el.position || { x: 0, z: 0 }) }, 
+            rotation: el.rotation || 0 
+          };
+          
+          // Rotate position around center
+          const px = pending.position.x - centerX;
+          const pz = pending.position.z - centerZ;
           const newX = px * Math.cos(angleRad) - pz * Math.sin(angleRad) + centerX;
           const newZ = px * Math.sin(angleRad) + pz * Math.cos(angleRad) + centerZ;
           
-          // Accumulate raw rotation
-          const baseRotation = rawRotations[elId] ?? pendingPositions[elId]?.rotation ?? el.rotation ?? 0;
-          const rawRotation = baseRotation + angleDelta;
-          rawRotations[elId] = rawRotation;
+          const baseRot = rawRotations[el.id] ?? pending.rotation;
+          let newRot = baseRot + angleDelta;
+          rawRotations[el.id] = newRot;
           
-          // Apply snap for display
-          let displayRotation = rawRotation;
           if (snapEnabled) {
-            displayRotation = Math.round(rawRotation / 45) * 45;
+            newRot = Math.round(newRot / 5) * 5;
           }
           
-          pendingPositions[elId] = { 
-            ...(pendingPositions[elId] || {}), 
-            x: newX, 
-            z: newZ, 
-            rotation: displayRotation 
-          };
-          
+          pendingElementTransforms[el.id] = { position: { x: newX, z: newZ }, rotation: newRot };
           mesh.position.x = newX;
           mesh.position.z = newZ;
-          mesh.rotation.y = (displayRotation * Math.PI) / 180;
+          mesh.rotation.y = newRot * Math.PI / 180;
         });
       }
     };
     
     // Commit pending changes to React state (called on mouse up)
     window.commitElementChanges = () => {
-      const pending = { ...pendingPositions };
-      if (Object.keys(pending).length > 0) {
+      let hasChanges = false;
+      
+      // Commit group transforms
+      if (Object.keys(pendingGroupTransforms).length > 0) {
+        hasChanges = true;
+        setGroups(prev => {
+          const updated = { ...prev };
+          Object.entries(pendingGroupTransforms).forEach(([groupId, transform]) => {
+            if (updated[groupId]) {
+              updated[groupId] = { ...updated[groupId], ...transform };
+            }
+          });
+          return updated;
+        });
+      }
+      
+      // Commit element transforms (for ungrouped elements)
+      if (Object.keys(pendingElementTransforms).length > 0) {
+        hasChanges = true;
         setElements(prev => prev.map(el => {
-          if (pending[el.id]) {
-            const updates = {};
-            if (pending[el.id].x !== undefined || pending[el.id].z !== undefined) {
-              updates.position = { 
-                x: pending[el.id].x ?? el.position?.x ?? 0, 
-                z: pending[el.id].z ?? el.position?.z ?? 0 
-              };
-            }
-            if (pending[el.id].rotation !== undefined) {
-              updates.rotation = pending[el.id].rotation;
-            }
-            return { ...el, ...updates };
+          const pending = pendingElementTransforms[el.id];
+          if (pending) {
+            return { 
+              ...el, 
+              position: pending.position,
+              rotation: pending.rotation 
+            };
           }
           return el;
         }));
-        pendingPositions = {};
-        rawPositions = {};  // Reset raw positions too
-        rawRotations = {}; // Reset raw rotations too
+      }
+      
+      if (hasChanges) {
+        pendingGroupTransforms = {};
+        pendingElementTransforms = {};
+        rawPositions = {};
+        rawRotations = {};
       }
     };
     
@@ -2817,7 +2897,7 @@ function Configurator({ project, onBack }) {
       delete window.rotateElement;
       delete window.commitElementChanges;
     };
-  }, [tool, snapEnabled, elements, selectedIds]);
+  }, [tool, snapEnabled, elements, selectedIds, groups]);
 
   // 3D Scene Setup
   useEffect(() => {
@@ -3194,8 +3274,8 @@ function Configurator({ project, onBack }) {
     const selectedEls = elements.filter(e => selectedIds.includes(e.id));
     if (selectedEls.length === 0) return;
     
-    const centerX = selectedEls.reduce((sum, e) => sum + (e.position?.x || 0), 0) / selectedEls.length;
-    const centerZ = selectedEls.reduce((sum, e) => sum + (e.position?.z || 0), 0) / selectedEls.length;
+    const centerX = selectedEls.reduce((sum, e) => sum + getWorldPosition(e).x, 0) / selectedEls.length;
+    const centerZ = selectedEls.reduce((sum, e) => sum + getWorldPosition(e).z, 0) / selectedEls.length;
     
     // Get average Y position (top of elements)
     const avgY = selectedEls.reduce((sum, e) => {
@@ -3209,9 +3289,9 @@ function Configurator({ project, onBack }) {
     
     if (tool === 'move') {
       // Create move gizmo (3 arrows for X, Y, Z axes)
-      const arrowLength = 0.4;
-      const arrowHeadLength = 0.1;
-      const arrowHeadWidth = 0.05;
+      const arrowLength = 0.25;
+      const arrowHeadLength = 0.06;
+      const arrowHeadWidth = 0.03;
       
       // X axis (red)
       const xDir = new THREE.Vector3(1, 0, 0);
@@ -3239,8 +3319,8 @@ function Configurator({ project, onBack }) {
       
     } else if (tool === 'rotate') {
       // Create rotate gizmo (3 circles/tori for X, Y, Z rotation)
-      const torusRadius = 0.35;
-      const tubeRadius = 0.015;
+      const torusRadius = 0.18;
+      const tubeRadius = 0.006;
       const segments = 32;
       
       // Y rotation (green ring - horizontal)
@@ -3271,6 +3351,13 @@ function Configurator({ project, onBack }) {
     if (gizmoGroup.children.length > 0) {
       sceneRef.current.add(gizmoGroup);
       gizmoRef.current = gizmoGroup;
+      
+      // Expose function to update gizmo position during drag
+      window.updateGizmoPosition = (x, y, z) => {
+        if (gizmoRef.current) {
+          gizmoRef.current.position.set(x, y, z);
+        }
+      };
     }
     
     return () => {
@@ -3278,8 +3365,9 @@ function Configurator({ project, onBack }) {
         sceneRef.current.remove(gizmoRef.current);
         gizmoRef.current = null;
       }
+      delete window.updateGizmoPosition;
     };
-  }, [tool, selectedIds, elements]);
+  }, [tool, selectedIds, elements, groups]);
 
   // Use the shared computeLayout function for texture UV mapping
   const layoutData = useMemo(() => computeLayout(elements, library), [elements, library]);
@@ -3346,9 +3434,11 @@ function Configurator({ project, onBack }) {
       // If only position/rotation changed, just update the mesh transform
       if (!isNew && !geometryChanged && !selectionChanged && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
-        mesh.position.x = el.position?.x || 0;
-        mesh.position.z = el.position?.z || 0;
-        mesh.rotation.y = (el.rotation || 0) * Math.PI / 180;
+        const worldPos = getWorldPosition(el);
+        const worldRot = getWorldRotation(el);
+        mesh.position.x = worldPos.x;
+        mesh.position.z = worldPos.z;
+        mesh.rotation.y = worldRot * Math.PI / 180;
         return;
       }
       
@@ -3398,9 +3488,11 @@ function Configurator({ project, onBack }) {
         }
         
         // Update position/rotation too
-        mesh.position.x = el.position?.x || 0;
-        mesh.position.z = el.position?.z || 0;
-        mesh.rotation.y = (el.rotation || 0) * Math.PI / 180;
+        const worldPos = getWorldPosition(el);
+        const worldRot = getWorldRotation(el);
+        mesh.position.x = worldPos.x;
+        mesh.position.z = worldPos.z;
+        mesh.rotation.y = worldRot * Math.PI / 180;
         return;
       }
       
@@ -3501,13 +3593,13 @@ function Configurator({ project, onBack }) {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
 
-      // Position
-      mesh.position.set(el.position?.x || 0, posY, el.position?.z || 0);
+      // Position - use world position for grouped elements
+      const worldPos = getWorldPosition(el);
+      const worldRot = getWorldRotation(el);
+      mesh.position.set(worldPos.x, posY, worldPos.z);
       
       // Rotation
-      if (el.rotation) {
-        mesh.rotation.y = (el.rotation * Math.PI) / 180;
-      }
+      mesh.rotation.y = (worldRot * Math.PI) / 180;
 
       // Selection highlight with outline (MeshBasicMaterial doesn't have emissive)
       // Note: isDirectlySelected, isGroupSelected, shouldHighlight already declared above
@@ -3686,7 +3778,7 @@ function Configurator({ project, onBack }) {
       newPrevElements[el.id] = { ...el, _wasSelected: isDirectlySelected || isGroupSelected };
     });
     prevElementsRef.current = newPrevElements;
-  }, [elements, selectedIds, library, pieceLayout]);
+  }, [elements, selectedIds, library, pieceLayout, groups]);
 
   // Helper functions
   const getColorById = (id) => library.colors.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
@@ -3750,84 +3842,102 @@ function Configurator({ project, onBack }) {
     setSelectedIds([]);
   };
 
-  // Group selected elements
+  // Group selected elements - creates parent with local offsets
   const groupSelected = () => {
     if (selectedIds.length < 2) return;
     
+    const selectedEls = elements.filter(el => selectedIds.includes(el.id));
+    
+    // Calculate center of selection (will be group position)
+    const centerX = selectedEls.reduce((sum, el) => sum + (getWorldPosition(el).x), 0) / selectedEls.length;
+    const centerZ = selectedEls.reduce((sum, el) => sum + (getWorldPosition(el).z), 0) / selectedEls.length;
+    
     const groupId = generateId();
-    setElements(elements.map(el => 
-      selectedIds.includes(el.id) ? { ...el, groupId } : el
-    ));
+    
+    // Create the group with center position
+    const newGroup = {
+      position: { x: centerX, z: centerZ },
+      rotation: 0
+    };
+    
+    // Update elements with local offsets relative to group center
+    const updatedElements = elements.map(el => {
+      if (!selectedIds.includes(el.id)) return el;
+      
+      const worldPos = getWorldPosition(el);
+      const worldRot = getWorldRotation(el);
+      
+      // If element was in another group, we need to "bake" its world transform first
+      // Then calculate new local offset from new group center
+      return {
+        ...el,
+        groupId,
+        localOffset: {
+          x: worldPos.x - centerX,
+          z: worldPos.z - centerZ
+        },
+        localRotation: worldRot,
+        // Clear old position/rotation since we now use local coords
+        position: undefined,
+        rotation: undefined
+      };
+    });
+    
+    setGroups({ ...groups, [groupId]: newGroup });
+    setElements(updatedElements);
   };
 
-  // Ungroup selected elements
+  // Ungroup selected elements - bakes world transforms back to elements
   const ungroupSelected = () => {
     if (selectedIds.length === 0) return;
     
     // Get all group IDs from selected elements
-    const groupIds = new Set(
+    const groupIdsToRemove = new Set(
       elements
         .filter(el => selectedIds.includes(el.id) && el.groupId)
         .map(el => el.groupId)
     );
     
-    if (groupIds.size === 0) return;
+    if (groupIdsToRemove.size === 0) return;
     
-    // Remove groupId from all elements in those groups
-    setElements(elements.map(el => 
-      groupIds.has(el.groupId) ? { ...el, groupId: undefined } : el
-    ));
+    // Bake world transforms back to elements and remove group references
+    const updatedElements = elements.map(el => {
+      if (!groupIdsToRemove.has(el.groupId)) return el;
+      
+      // Calculate final world position and rotation
+      const worldPos = getWorldPosition(el);
+      const worldRot = getWorldRotation(el);
+      
+      return {
+        ...el,
+        position: worldPos,
+        rotation: worldRot,
+        groupId: undefined,
+        localOffset: undefined,
+        localRotation: undefined
+      };
+    });
+    
+    // Remove the groups
+    const newGroups = { ...groups };
+    groupIdsToRemove.forEach(gid => delete newGroups[gid]);
+    
+    setGroups(newGroups);
+    setElements(updatedElements);
   };
 
-  // Get geometric center of selected elements
+  // Get geometric center of selected elements (using world positions)
   const getSelectionCenter = () => {
     const selected = elements.filter(el => selectedIds.includes(el.id));
     if (selected.length === 0) return { x: 0, z: 0 };
     
-    const sumX = selected.reduce((sum, el) => sum + (el.position?.x || 0), 0);
-    const sumZ = selected.reduce((sum, el) => sum + (el.position?.z || 0), 0);
+    const sumX = selected.reduce((sum, el) => sum + getWorldPosition(el).x, 0);
+    const sumZ = selected.reduce((sum, el) => sum + getWorldPosition(el).z, 0);
     
     return {
       x: sumX / selected.length,
       z: sumZ / selected.length
     };
-  };
-
-  // Move all selected elements by delta
-  const moveSelectedElements = (deltaX, deltaZ) => {
-    setElements(elements.map(el => {
-      if (!selectedIds.includes(el.id)) return el;
-      return {
-        ...el,
-        position: {
-          x: (el.position?.x || 0) + deltaX,
-          z: (el.position?.z || 0) + deltaZ
-        }
-      };
-    }));
-  };
-
-  // Rotate all selected elements around their geometric center
-  const rotateSelectedElements = (angleDelta) => {
-    const center = getSelectionCenter();
-    const angleRad = (angleDelta * Math.PI) / 180;
-    
-    setElements(elements.map(el => {
-      if (!selectedIds.includes(el.id)) return el;
-      
-      // Rotate position around center
-      const px = (el.position?.x || 0) - center.x;
-      const pz = (el.position?.z || 0) - center.z;
-      
-      const newX = px * Math.cos(angleRad) - pz * Math.sin(angleRad) + center.x;
-      const newZ = px * Math.sin(angleRad) + pz * Math.cos(angleRad) + center.z;
-      
-      return {
-        ...el,
-        position: { x: newX, z: newZ },
-        rotation: ((el.rotation || 0) + angleDelta) % 360
-      };
-    }));
   };
 
   // Select element with shift support for multi-select
