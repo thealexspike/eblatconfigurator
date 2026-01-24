@@ -3334,9 +3334,14 @@ function Configurator({ project, onBack }) {
       const currentHash = getGeometryHash(el);
       const geometryChanged = prevHash !== currentHash;
       const isNew = !prevEl;
-      const isSelected = selectedIds.includes(el.id);
+      
+      // Check if this element is selected OR if any element in same group is selected
+      const isDirectlySelected = selectedIds.includes(el.id);
+      const isGroupSelected = el.groupId && elements.some(e => e.groupId === el.groupId && selectedIds.includes(e.id));
+      const shouldHighlight = isDirectlySelected || isGroupSelected;
+      
       const wasSelected = prevEl?._wasSelected || false;
-      const selectionChanged = prevEl && (isSelected !== wasSelected);
+      const selectionChanged = prevEl && (shouldHighlight !== wasSelected);
       
       // If only position/rotation changed, just update the mesh transform
       if (!isNew && !geometryChanged && !selectionChanged && meshesRef.current[el.id]) {
@@ -3371,8 +3376,8 @@ function Configurator({ project, onBack }) {
         });
         
         // Add outline if selected (MeshBasicMaterial doesn't have emissive, so just outline)
-        if (isSelected) {
-          // Purple for group, gold for individual selection
+        if (shouldHighlight) {
+          // Purple for grouped elements, gold for ungrouped
           const outlineColor = el.groupId ? 0x9b59b6 : 0xc9a962;
           mesh.traverse((child) => {
             if (child.isMesh && child.geometry) {
@@ -3505,13 +3510,15 @@ function Configurator({ project, onBack }) {
       }
 
       // Selection highlight with outline (MeshBasicMaterial doesn't have emissive)
-      const isSelected = selectedIds.includes(el.id);
-      const isInGroup = el.groupId && elements.some(e => e.groupId === el.groupId && selectedIds.includes(e.id));
+      // Check if this element is selected OR if any element in same group is selected
+      const isDirectlySelected = selectedIds.includes(el.id);
+      const isGroupSelected = el.groupId && elements.some(e => e.groupId === el.groupId && selectedIds.includes(e.id));
+      const shouldHighlight = isDirectlySelected || isGroupSelected;
       
-      if (isSelected || isInGroup) {
+      if (shouldHighlight) {
         // Add outline edges for selection
         const edges = new THREE.EdgesGeometry(geometry, 15);
-        // Purple for group, gold for individual selection
+        // Purple for grouped elements, gold for ungrouped
         const outlineColor = el.groupId ? 0x9b59b6 : 0xc9a962;
         const lineMaterial = new THREE.LineBasicMaterial({ 
           color: outlineColor, 
@@ -3676,7 +3683,10 @@ function Configurator({ project, onBack }) {
     // This needs to happen for ALL elements, not just recreated ones
     const newPrevElements = {};
     elements.forEach(el => {
-      newPrevElements[el.id] = { ...el, _wasSelected: selectedIds.includes(el.id) };
+      // Track if element should be highlighted (directly selected or group selected)
+      const isDirectlySelected = selectedIds.includes(el.id);
+      const isGroupSelected = el.groupId && elements.some(e => e.groupId === el.groupId && selectedIds.includes(e.id));
+      newPrevElements[el.id] = { ...el, _wasSelected: isDirectlySelected || isGroupSelected };
     });
     prevElementsRef.current = newPrevElements;
   }, [elements, selectedIds, library, pieceLayout]);
@@ -5070,9 +5080,11 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                           const pieceWpx = p.pieceW * uniformScale;
                           const pieceHpx = p.pieceH * uniformScale;
                           
-                          const isSelected = selectedIds.includes(p.elementId);
                           const pieceElement = elements.find(e => e.id === p.elementId);
-                          const isInGroup = pieceElement?.groupId && elements.some(e => e.groupId === pieceElement.groupId && selectedIds.includes(e.id));
+                          const isDirectlySelected = selectedIds.includes(p.elementId);
+                          const isGroupSelected = pieceElement?.groupId && elements.some(e => e.groupId === pieceElement.groupId && selectedIds.includes(e.id));
+                          const shouldHighlight = isDirectlySelected || isGroupSelected;
+                          
                           const exceeds = p.exceeds;
                           const isLeftWaterfall = p.waterfallSide === 'left';
                           const isRightWaterfall = p.waterfallSide === 'right';
@@ -5089,25 +5101,23 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                             borderStyle = '2px solid #c96262';
                             textColor = '#fff';
                             boxShadowColor = 'rgba(201, 98, 98, 0.8)';
-                          } else if (isSelected && isLeftWaterfall) {
+                          } else if (shouldHighlight && isLeftWaterfall) {
                             overlayColor = 'rgba(74, 144, 217, 0.5)';
                             borderStyle = '2px solid #4a90d9';
                             textColor = '#fff';
                             boxShadowColor = 'rgba(74, 144, 217, 0.8)';
-                          } else if (isSelected && isRightWaterfall) {
+                          } else if (shouldHighlight && isRightWaterfall) {
                             overlayColor = 'rgba(92, 184, 92, 0.5)';
                             borderStyle = '2px solid #5cb85c';
                             textColor = '#fff';
                             boxShadowColor = 'rgba(92, 184, 92, 0.8)';
-                          } else if (isSelected || isInGroup) {
-                            // Purple for group, gold for individual
-                            const groupColor = pieceElement?.groupId ? 'rgba(155, 89, 182, 0.5)' : 'rgba(201, 169, 98, 0.5)';
-                            const groupBorder = pieceElement?.groupId ? '#9b59b6' : '#c9a962';
-                            const groupShadow = pieceElement?.groupId ? 'rgba(155, 89, 182, 0.8)' : 'rgba(201, 169, 98, 0.8)';
-                            overlayColor = groupColor;
-                            borderStyle = `2px solid ${groupBorder}`;
+                          } else if (shouldHighlight) {
+                            // Purple for grouped elements, gold for ungrouped
+                            const hasGroup = pieceElement?.groupId;
+                            overlayColor = hasGroup ? 'rgba(155, 89, 182, 0.5)' : 'rgba(201, 169, 98, 0.5)';
+                            borderStyle = hasGroup ? '2px solid #9b59b6' : '2px solid #c9a962';
                             textColor = '#fff';
-                            boxShadowColor = groupShadow;
+                            boxShadowColor = hasGroup ? 'rgba(155, 89, 182, 0.8)' : 'rgba(201, 169, 98, 0.8)';
                           } else {
                             overlayColor = 'transparent';
                             borderStyle = `1px solid ${isLight ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)'}`;
@@ -5133,7 +5143,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                 overflow: 'hidden',
                                 boxSizing: 'border-box',
                                 cursor: 'pointer',
-                                zIndex: exceeds ? 11 : (isSelected ? 10 : 1),
+                                zIndex: exceeds ? 11 : (shouldHighlight ? 10 : 1),
                               }}
                               title={`${p.name}: ${p.pieceW}×${p.pieceH}cm${exceeds ? ' ⚠️ DEPĂȘEȘTE!' : ''}${isLeftWaterfall ? ' (Cascadă Stânga)' : ''}${isRightWaterfall ? ' (Cascadă Dreapta)' : ''}`}
                             >
@@ -5149,11 +5159,11 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                 justifyContent: 'center',
                                 fontSize: '10px',
                                 color: textColor,
-                                fontWeight: (isSelected || exceeds) ? 600 : 500,
+                                fontWeight: (shouldHighlight || exceeds) ? 600 : 500,
                                 textShadow: '0 0 2px rgba(0,0,0,0.8)',
                               }}>
                                 {/* Joint edge indicators */}
-                                {isSelected && (isLeftWaterfall || isRightWaterfall) && (
+                                {shouldHighlight && (isLeftWaterfall || isRightWaterfall) && (
                                   <div style={{
                                     position: 'absolute',
                                     top: 0, left: 0, width: 4, bottom: 0,
@@ -5161,7 +5171,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                     borderRadius: '2px 0 0 2px',
                                   }} />
                                 )}
-                                {isSelected && isSlab && slabHasLeftWf && (
+                                {shouldHighlight && isSlab && slabHasLeftWf && (
                                   <div style={{
                                     position: 'absolute',
                                     top: 0, left: 0, width: 4, bottom: 0,
@@ -5169,7 +5179,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                     borderRadius: '2px 0 0 2px',
                                   }} />
                                 )}
-                                {isSelected && isSlab && slabHasRightWf && (
+                                {shouldHighlight && isSlab && slabHasRightWf && (
                                   <div style={{
                                     position: 'absolute',
                                     top: 0, right: 0, width: 4, bottom: 0,
@@ -5182,8 +5192,8 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                 {pieceWpx > 40 && pieceHpx > 15 ? (
                                   <span>
                                     {exceeds && '⚠️ '}
-                                    {isLeftWaterfall && isSelected && '◀ '}
-                                    {isRightWaterfall && isSelected && '▶ '}
+                                    {isLeftWaterfall && shouldHighlight && '◀ '}
+                                    {isRightWaterfall && shouldHighlight && '▶ '}
                                     <strong style={{ color: '#c9a962' }}>{p.pieceNumber}</strong> {p.pieceW}×{p.pieceH}
                                   </span>
                                 ) : pieceWpx > 25 && pieceHpx > 12 ? (
