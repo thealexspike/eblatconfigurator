@@ -2711,23 +2711,77 @@ function Configurator({ project, onBack }) {
         
         rawPositions[selectedGroupId] = { x: newX, z: newZ };
         
-        // Snap group center to other elements
+        // Snap group elements to other elements (edge to edge)
         if (snapEnabled) {
           const SNAP_THRESHOLD = 0.10;
           const snapIndicators = [];
+          let snapDeltaX = null, snapDeltaZ = null;
           
-          elements.forEach(other => {
-            if (other.groupId === selectedGroupId) return; // Skip own group members
-            const otherPos = getWorldPosDuringDrag(other);
-            if (Math.abs(newX - otherPos.x) < SNAP_THRESHOLD) {
-              newX = otherPos.x;
-              snapIndicators.push({ x: newX, z: newZ, axis: 'x' });
-            }
-            if (Math.abs(newZ - otherPos.z) < SNAP_THRESHOLD) {
-              newZ = otherPos.z;
-              snapIndicators.push({ x: newX, z: newZ, axis: 'z' });
-            }
+          // Get group members with their would-be world positions
+          const groupMembers = elements.filter(e => e.groupId === selectedGroupId);
+          const tempGroupPos = { x: newX, z: newZ };
+          const groupRot = (pending.rotation || 0) * Math.PI / 180;
+          
+          // Check each group member against non-group elements
+          groupMembers.forEach(member => {
+            if (snapDeltaX !== null && snapDeltaZ !== null) return; // Already found both snaps
+            
+            // Calculate member's would-be world position
+            const localX = member.localOffset?.x || 0;
+            const localZ = member.localOffset?.z || 0;
+            const memberWorldX = tempGroupPos.x + localX * Math.cos(groupRot) - localZ * Math.sin(groupRot);
+            const memberWorldZ = tempGroupPos.z + localX * Math.sin(groupRot) + localZ * Math.cos(groupRot);
+            
+            const memberRot = ((member.localRotation || 0) + (pending.rotation || 0)) % 360;
+            const isRotated90 = Math.abs(memberRot % 180 - 90) < 5;
+            let memberW = member.length / 100;
+            let memberD = member.type === 'backsplash' ? (member.thickness || 12) / 1000 : member.depth / 100;
+            if (isRotated90) [memberW, memberD] = [memberD, memberW];
+            
+            const memberLeft = memberWorldX - memberW / 2;
+            const memberRight = memberWorldX + memberW / 2;
+            const memberFront = memberWorldZ - memberD / 2;
+            const memberBack = memberWorldZ + memberD / 2;
+            
+            elements.forEach(other => {
+              if (other.groupId === selectedGroupId) return;
+              
+              const otherPos = getWorldPosDuringDrag(other);
+              const otherRot = (other.rotation ?? 0) % 360;
+              const otherIsRotated90 = Math.abs(otherRot % 180 - 90) < 5;
+              let otherW = other.length / 100;
+              let otherD = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
+              if (otherIsRotated90) [otherW, otherD] = [otherD, otherW];
+              
+              const otherLeft = otherPos.x - otherW / 2;
+              const otherRight = otherPos.x + otherW / 2;
+              const otherFront = otherPos.z - otherD / 2;
+              const otherBack = otherPos.z + otherD / 2;
+              
+              // X snaps
+              if (snapDeltaX === null && Math.abs(memberRight - otherLeft) < SNAP_THRESHOLD) {
+                snapDeltaX = otherLeft - memberRight;
+                snapIndicators.push({ x: otherLeft, z: memberWorldZ, axis: 'x' });
+              }
+              if (snapDeltaX === null && Math.abs(memberLeft - otherRight) < SNAP_THRESHOLD) {
+                snapDeltaX = otherRight - memberLeft;
+                snapIndicators.push({ x: otherRight, z: memberWorldZ, axis: 'x' });
+              }
+              
+              // Z snaps
+              if (snapDeltaZ === null && Math.abs(memberBack - otherFront) < SNAP_THRESHOLD) {
+                snapDeltaZ = otherFront - memberBack;
+                snapIndicators.push({ x: memberWorldX, z: otherFront, axis: 'z' });
+              }
+              if (snapDeltaZ === null && Math.abs(memberFront - otherBack) < SNAP_THRESHOLD) {
+                snapDeltaZ = otherBack - memberFront;
+                snapIndicators.push({ x: memberWorldX, z: otherBack, axis: 'z' });
+              }
+            });
           });
+          
+          if (snapDeltaX !== null) newX += snapDeltaX;
+          if (snapDeltaZ !== null) newZ += snapDeltaZ;
           
           window.updateSnapIndicators?.(snapIndicators);
         }
@@ -2749,6 +2803,8 @@ function Configurator({ project, onBack }) {
         
       } else {
         // Moving ungrouped elements or mixed selection
+        let snapDeltaX = 0, snapDeltaZ = 0;
+        
         selectedIds.forEach((elId, idx) => {
           const mesh = meshesRef.current[elId];
           const el = elements.find(e => e.id === elId);
@@ -2761,28 +2817,85 @@ function Configurator({ project, onBack }) {
           
           const baseX = rawPositions[elId]?.x ?? pending.position.x;
           const baseZ = rawPositions[elId]?.z ?? pending.position.z;
-          let newX = baseX + delta.x;
-          let newZ = baseZ + delta.z;
+          let newX = baseX + delta.x + snapDeltaX;
+          let newZ = baseZ + delta.z + snapDeltaZ;
           
-          rawPositions[elId] = { x: newX, z: newZ };
+          rawPositions[elId] = { x: baseX + delta.x, z: baseZ + delta.z }; // Store raw without snap
           
-          // Apply snap for first element only
+          // Apply snap for first element only, then propagate to others
           if (idx === 0 && snapEnabled) {
             const SNAP_THRESHOLD = 0.10;
             const snapIndicators = [];
             
+            // Get dimensions of moving element
+            const elRotation = (pending.rotation || 0) % 360;
+            const isRotated90 = Math.abs(elRotation % 180 - 90) < 5;
+            let movingWidth = el.length / 100;
+            let movingDepth = el.type === 'backsplash' ? (el.thickness || 12) / 1000 : el.depth / 100;
+            if (isRotated90) [movingWidth, movingDepth] = [movingDepth, movingWidth];
+            
+            const movingLeft = newX - movingWidth / 2;
+            const movingRight = newX + movingWidth / 2;
+            const movingFront = newZ - movingDepth / 2;
+            const movingBack = newZ + movingDepth / 2;
+            
+            let snapX = null, snapZ = null;
+            
             elements.forEach(other => {
               if (selectedIds.includes(other.id)) return;
+              
               const otherPos = getWorldPosDuringDrag(other);
-              if (Math.abs(newX - otherPos.x) < SNAP_THRESHOLD) {
-                newX = otherPos.x;
-                snapIndicators.push({ x: newX, z: newZ, axis: 'x' });
+              const otherRot = (pendingElementTransforms[other.id]?.rotation ?? other.rotation ?? 0) % 360;
+              const otherIsRotated90 = Math.abs(otherRot % 180 - 90) < 5;
+              
+              let otherWidth = other.length / 100;
+              let otherDepth = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
+              if (otherIsRotated90) [otherWidth, otherDepth] = [otherDepth, otherWidth];
+              
+              const otherLeft = otherPos.x - otherWidth / 2;
+              const otherRight = otherPos.x + otherWidth / 2;
+              const otherFront = otherPos.z - otherDepth / 2;
+              const otherBack = otherPos.z + otherDepth / 2;
+              
+              // X snaps - edge to edge
+              if (snapX === null && Math.abs(movingRight - otherLeft) < SNAP_THRESHOLD) {
+                snapX = otherLeft - movingWidth / 2;
+                snapIndicators.push({ x: otherLeft, z: newZ, axis: 'x' });
               }
-              if (Math.abs(newZ - otherPos.z) < SNAP_THRESHOLD) {
-                newZ = otherPos.z;
-                snapIndicators.push({ x: newX, z: newZ, axis: 'z' });
+              if (snapX === null && Math.abs(movingLeft - otherRight) < SNAP_THRESHOLD) {
+                snapX = otherRight + movingWidth / 2;
+                snapIndicators.push({ x: otherRight, z: newZ, axis: 'x' });
+              }
+              // Center to center X
+              if (snapX === null && Math.abs(newX - otherPos.x) < SNAP_THRESHOLD) {
+                snapX = otherPos.x;
+                snapIndicators.push({ x: otherPos.x, z: newZ, axis: 'x' });
+              }
+              
+              // Z snaps - edge to edge
+              if (snapZ === null && Math.abs(movingBack - otherFront) < SNAP_THRESHOLD) {
+                snapZ = otherFront - movingDepth / 2;
+                snapIndicators.push({ x: newX, z: otherFront, axis: 'z' });
+              }
+              if (snapZ === null && Math.abs(movingFront - otherBack) < SNAP_THRESHOLD) {
+                snapZ = otherBack + movingDepth / 2;
+                snapIndicators.push({ x: newX, z: otherBack, axis: 'z' });
+              }
+              // Center to center Z
+              if (snapZ === null && Math.abs(newZ - otherPos.z) < SNAP_THRESHOLD) {
+                snapZ = otherPos.z;
+                snapIndicators.push({ x: newX, z: otherPos.z, axis: 'z' });
               }
             });
+            
+            if (snapX !== null) {
+              snapDeltaX = snapX - newX;
+              newX = snapX;
+            }
+            if (snapZ !== null) {
+              snapDeltaZ = snapZ - newZ;
+              newZ = snapZ;
+            }
             
             // Update visual snap indicators
             window.updateSnapIndicators?.(snapIndicators);
