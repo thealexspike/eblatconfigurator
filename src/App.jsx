@@ -2832,6 +2832,13 @@ function Configurator({ project, onBack }) {
         
         pendingGroupTransforms[selectedGroupId] = { ...pending, rotation: newRot };
         
+        // Debug log
+        console.log('Group rotation:', {
+          groupId: selectedGroupId,
+          groupPos: pending.position,
+          newGroupRot: newRot,
+        });
+        
         // Update all group member meshes
         elements.filter(e => e.groupId === selectedGroupId).forEach(el => {
           const mesh = meshesRef.current[el.id];
@@ -2839,6 +2846,14 @@ function Configurator({ project, onBack }) {
           
           const worldPos = getWorldPosDuringDrag(el);
           const worldRot = getWorldRotDuringDrag(el);
+          
+          console.log('Element update:', {
+            elId: el.id,
+            localOffset: el.localOffset,
+            localRotation: el.localRotation,
+            worldPos,
+            worldRot,
+          });
           
           mesh.position.x = worldPos.x;
           mesh.position.z = worldPos.z;
