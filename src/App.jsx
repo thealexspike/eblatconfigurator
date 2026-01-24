@@ -2965,12 +2965,6 @@ function Configurator({ project, onBack }) {
         const groupPos = pending.position;
         const groupRotRad = newRot * Math.PI / 180;
         
-        console.log('GROUP ROTATE DEBUG:', {
-          groupPos,
-          groupRotDeg: newRot,
-          groupRotRad
-        });
-        
         // Update all group member meshes
         elements.filter(e => e.groupId === selectedGroupId).forEach(el => {
           const mesh = meshesRef.current[el.id];
@@ -2981,15 +2975,19 @@ function Configurator({ project, onBack }) {
           const localRot = el.localRotation || 0;
           
           // Calculate world position: rotate localOffset by group rotation
-          const worldX = groupPos.x + localX * Math.cos(groupRotRad) - localZ * Math.sin(groupRotRad);
-          const worldZ = groupPos.z + localX * Math.sin(groupRotRad) + localZ * Math.cos(groupRotRad);
+          const cosR = Math.cos(groupRotRad);
+          const sinR = Math.sin(groupRotRad);
+          const worldX = groupPos.x + localX * cosR - localZ * sinR;
+          const worldZ = groupPos.z + localX * sinR + localZ * cosR;
           const worldRot = localRot + newRot;
           
-          console.log('ELEMENT:', {
-            id: el.id.slice(0,6),
+          console.log('ROTATION CALC:', {
+            groupPos: { x: groupPos.x.toFixed(3), z: groupPos.z.toFixed(3) },
+            groupRotDeg: newRot,
             localOffset: { x: localX.toFixed(3), z: localZ.toFixed(3) },
-            calculatedWorld: { x: worldX.toFixed(3), z: worldZ.toFixed(3) },
-            meshBefore: { x: mesh.position.x.toFixed(3), z: mesh.position.z.toFixed(3) }
+            cosR: cosR.toFixed(3),
+            sinR: sinR.toFixed(3),
+            result: { x: worldX.toFixed(3), z: worldZ.toFixed(3) }
           });
           
           mesh.position.x = worldX;
