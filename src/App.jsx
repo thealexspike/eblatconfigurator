@@ -3,6 +3,34 @@ import * as THREE from 'three';
 import { createClient } from '@supabase/supabase-js';
 
 // ============================================
+// GLOBAL HELPER FUNCTIONS
+// ============================================
+
+// Convert HSL to hex for Three.js
+const hslToHex = (h, s, l) => {
+  s /= 100;
+  l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color).toString(16).padStart(2, '0');
+  };
+  return parseInt(`${f(0)}${f(8)}${f(4)}`, 16);
+};
+
+// Get consistent color for a group (used in sidebar, footer, and 3D)
+const getGroupColor = (groupId) => {
+  if (!groupId) return null;
+  const hue = parseInt(groupId, 36) % 360;
+  return {
+    hsl: `hsl(${hue}, 60%, 50%)`,
+    hex: hslToHex(hue, 60, 50),
+    hue
+  };
+};
+
+// ============================================
 // LAYOUT & TEXTURE MAPPING - SINGLE SOURCE OF TRUTH
 // ============================================
 
@@ -3832,30 +3860,6 @@ function Configurator({ project, onBack }) {
   const getManufacturerForColor = (colorId) => {
     const color = library.colors.find(c => c.id === colorId);
     return color?.manufacturer || library.manufacturers[0]?.id;
-  };
-  
-  // Get consistent color for a group (used in sidebar, footer, and 3D)
-  const getGroupColor = (groupId) => {
-    if (!groupId) return null;
-    const hue = parseInt(groupId, 36) % 360;
-    return {
-      hsl: `hsl(${hue}, 60%, 50%)`,
-      hex: hslToHex(hue, 60, 50),
-      hue
-    };
-  };
-  
-  // Convert HSL to hex for Three.js
-  const hslToHex = (h, s, l) => {
-    s /= 100;
-    l /= 100;
-    const a = s * Math.min(l, 1 - l);
-    const f = n => {
-      const k = (n + h / 30) % 12;
-      const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
-      return Math.round(255 * color).toString(16).padStart(2, '0');
-    };
-    return parseInt(`${f(0)}${f(8)}${f(4)}`, 16);
   };
 
   const getThicknessesForColor = (colorId) => {
