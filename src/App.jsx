@@ -2683,7 +2683,26 @@ function Configurator({ project, onBack }) {
         
         rawPositions[selectedGroupId] = { x: newX, z: newZ };
         
-        // TODO: Could add snap logic here for group center
+        // Snap group center to other elements
+        if (snapEnabled) {
+          const SNAP_THRESHOLD = 0.10;
+          const snapIndicators = [];
+          
+          elements.forEach(other => {
+            if (other.groupId === selectedGroupId) return; // Skip own group members
+            const otherPos = getWorldPosDuringDrag(other);
+            if (Math.abs(newX - otherPos.x) < SNAP_THRESHOLD) {
+              newX = otherPos.x;
+              snapIndicators.push({ x: newX, z: newZ, axis: 'x' });
+            }
+            if (Math.abs(newZ - otherPos.z) < SNAP_THRESHOLD) {
+              newZ = otherPos.z;
+              snapIndicators.push({ x: newX, z: newZ, axis: 'z' });
+            }
+          });
+          
+          window.updateSnapIndicators?.(snapIndicators);
+        }
         
         pendingGroupTransforms[selectedGroupId] = { 
           ...pending, 
@@ -2722,12 +2741,23 @@ function Configurator({ project, onBack }) {
           // Apply snap for first element only
           if (idx === 0 && snapEnabled) {
             const SNAP_THRESHOLD = 0.10;
+            const snapIndicators = [];
+            
             elements.forEach(other => {
               if (selectedIds.includes(other.id)) return;
               const otherPos = getWorldPosDuringDrag(other);
-              if (Math.abs(newX - otherPos.x) < SNAP_THRESHOLD) newX = otherPos.x;
-              if (Math.abs(newZ - otherPos.z) < SNAP_THRESHOLD) newZ = otherPos.z;
+              if (Math.abs(newX - otherPos.x) < SNAP_THRESHOLD) {
+                newX = otherPos.x;
+                snapIndicators.push({ x: newX, z: newZ, axis: 'x' });
+              }
+              if (Math.abs(newZ - otherPos.z) < SNAP_THRESHOLD) {
+                newZ = otherPos.z;
+                snapIndicators.push({ x: newX, z: newZ, axis: 'z' });
+              }
             });
+            
+            // Update visual snap indicators
+            window.updateSnapIndicators?.(snapIndicators);
           }
           
           pendingElementTransforms[elId] = { ...pending, position: { x: newX, z: newZ } };
@@ -3091,8 +3121,14 @@ function Configurator({ project, onBack }) {
         const hitElementId = getIntersectedElement(e);
         
         if (hitElementId) {
-          // Clicked on an element - pass ctrlKey and shiftKey for multi-select
-          window.selectElement?.(hitElementId, { ctrlKey: e.ctrlKey || e.metaKey, shiftKey: e.shiftKey });
+          // Shift+Click for duplicate on drag start
+          if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            // Will duplicate on first move
+            window._pendingDuplicate = true;
+          }
+          
+          // Clicked on an element - pass ctrlKey for multi-select (not shiftKey which is for duplicate)
+          window.selectElement?.(hitElementId, { ctrlKey: e.ctrlKey || e.metaKey, shiftKey: false });
           
           const currentTool = window.getCurrentTool?.() || 'select';
           
@@ -3118,6 +3154,8 @@ function Configurator({ project, onBack }) {
       }
       // Clear snap indicators
       window.clearSnapIndicators?.();
+      // Clear duplicate flag
+      window._pendingDuplicate = false;
       
       isDraggingOrbit = false;
       isDraggingPan = false;
@@ -3474,8 +3512,9 @@ function Configurator({ project, onBack }) {
         
         // Add outline if selected (MeshBasicMaterial doesn't have emissive, so just outline)
         if (shouldHighlight) {
-          // Purple for grouped elements, gold for ungrouped
-          const outlineColor = el.groupId ? 0x9b59b6 : 0xc9a962;
+          // Use group color for grouped elements, gold for ungrouped
+          const groupColorData = getGroupColor(el.groupId);
+          const outlineColor = groupColorData ? groupColorData.hex : 0xc9a962;
           mesh.traverse((child) => {
             if (child.isMesh && child.geometry) {
               const edges = new THREE.EdgesGeometry(child.geometry, 15);
@@ -3614,8 +3653,9 @@ function Configurator({ project, onBack }) {
       if (shouldHighlight) {
         // Add outline edges for selection
         const edges = new THREE.EdgesGeometry(geometry, 15);
-        // Purple for grouped elements, gold for ungrouped
-        const outlineColor = el.groupId ? 0x9b59b6 : 0xc9a962;
+        // Use group color for grouped elements, gold for ungrouped
+        const groupColorData = getGroupColor(el.groupId);
+        const outlineColor = groupColorData ? groupColorData.hex : 0xc9a962;
         const lineMaterial = new THREE.LineBasicMaterial({ 
           color: outlineColor, 
           linewidth: 2,
@@ -3792,6 +3832,30 @@ function Configurator({ project, onBack }) {
   const getManufacturerForColor = (colorId) => {
     const color = library.colors.find(c => c.id === colorId);
     return color?.manufacturer || library.manufacturers[0]?.id;
+  };
+  
+  // Get consistent color for a group (used in sidebar, footer, and 3D)
+  const getGroupColor = (groupId) => {
+    if (!groupId) return null;
+    const hue = parseInt(groupId, 36) % 360;
+    return {
+      hsl: `hsl(${hue}, 60%, 50%)`,
+      hex: hslToHex(hue, 60, 50),
+      hue
+    };
+  };
+  
+  // Convert HSL to hex for Three.js
+  const hslToHex = (h, s, l) => {
+    s /= 100;
+    l /= 100;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => {
+      const k = (n + h / 30) % 12;
+      const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+      return Math.round(255 * color).toString(16).padStart(2, '0');
+    };
+    return parseInt(`${f(0)}${f(8)}${f(4)}`, 16);
   };
 
   const getThicknessesForColor = (colorId) => {
@@ -3984,16 +4048,64 @@ function Configurator({ project, onBack }) {
 
   const duplicateElement = (id) => {
     const el = elements.find(e => e.id === id);
-    if (el) {
-      const newEl = {
+    if (!el) return;
+    
+    // For grouped elements, get world position
+    const worldPos = getWorldPosition(el);
+    const worldRot = getWorldRotation(el);
+    
+    const newEl = {
+      ...el,
+      id: generateId(),
+      name: `${el.name} (copie)`,
+      position: { x: worldPos.x + 0.3, z: worldPos.z + 0.3 },
+      rotation: worldRot,
+      // Remove group info for duplicated element
+      groupId: undefined,
+      localOffset: undefined,
+      localRotation: undefined,
+    };
+    setElements([...elements, newEl]);
+    setSelectedId(newEl.id);
+  };
+
+  // Clipboard for copy/paste
+  const [clipboard, setClipboard] = useState(null);
+  
+  const copySelected = () => {
+    if (selectedIds.length === 0) return;
+    
+    // Copy all selected elements with their world transforms
+    const copied = elements
+      .filter(el => selectedIds.includes(el.id))
+      .map(el => ({
         ...el,
-        id: generateId(),
-        name: `${el.name} (copie)`,
-        position: { x: (el.position?.x || 0) + 0.3, z: (el.position?.z || 0) + 0.3 },
-      };
-      setElements([...elements, newEl]);
-      setSelectedId(newEl.id);
-    }
+        position: getWorldPosition(el),
+        rotation: getWorldRotation(el),
+        // Remove group info
+        groupId: undefined,
+        localOffset: undefined,
+        localRotation: undefined,
+      }));
+    
+    setClipboard(copied);
+  };
+  
+  const pasteClipboard = () => {
+    if (!clipboard || clipboard.length === 0) return;
+    
+    const newElements = clipboard.map(el => ({
+      ...el,
+      id: generateId(),
+      name: `${el.name} (copie)`,
+      position: { 
+        x: (el.position?.x || 0) + 0.3, 
+        z: (el.position?.z || 0) + 0.3 
+      },
+    }));
+    
+    setElements([...elements, ...newElements]);
+    setSelectedIds(newElements.map(el => el.id));
   };
 
   const selected = elements.find(el => el.id === selectedId);
@@ -4045,6 +4157,18 @@ function Configurator({ project, onBack }) {
       if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
         e.preventDefault();
         setSelectedIds(elements.map(el => el.id));
+      }
+      
+      // Ctrl+C - Copy
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        e.preventDefault();
+        copySelected();
+      }
+      
+      // Ctrl+V - Paste
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        e.preventDefault();
+        pasteClipboard();
       }
     };
 
@@ -4188,7 +4312,8 @@ function Configurator({ project, onBack }) {
             ) : elements.map(el => {
               const isSelected = selectedIds.includes(el.id);
               const hasGroup = el.groupId;
-              const groupColor = hasGroup ? `hsl(${parseInt(el.groupId, 36) % 360}, 60%, 50%)` : null;
+              const groupColorData = getGroupColor(el.groupId);
+              const groupColor = groupColorData?.hsl;
               
               return (
                 <div
@@ -4198,8 +4323,8 @@ function Configurator({ project, onBack }) {
                     padding: '10px',
                     marginBottom: '6px',
                     cursor: 'pointer',
-                    background: isSelected ? 'rgba(201,169,98,0.15)' : '#1a1a1a',
-                    border: `2px solid ${isSelected ? '#c9a962' : '#2a2a2a'}`,
+                    background: isSelected ? (groupColorData ? `hsla(${groupColorData.hue}, 60%, 50%, 0.15)` : 'rgba(201,169,98,0.15)') : '#1a1a1a',
+                    border: `2px solid ${isSelected ? (groupColor || '#c9a962') : '#2a2a2a'}`,
                     borderRadius: '4px',
                     borderLeft: hasGroup ? `4px solid ${groupColor}` : undefined,
                   }}
@@ -5226,12 +5351,18 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                             textColor = '#fff';
                             boxShadowColor = 'rgba(92, 184, 92, 0.8)';
                           } else if (shouldHighlight) {
-                            // Purple for grouped elements, gold for ungrouped
-                            const hasGroup = pieceElement?.groupId;
-                            overlayColor = hasGroup ? 'rgba(155, 89, 182, 0.5)' : 'rgba(201, 169, 98, 0.5)';
-                            borderStyle = hasGroup ? '2px solid #9b59b6' : '2px solid #c9a962';
+                            // Use group color for grouped elements, gold for ungrouped
+                            const groupColorData = getGroupColor(pieceElement?.groupId);
+                            if (groupColorData) {
+                              overlayColor = `hsla(${groupColorData.hue}, 60%, 50%, 0.5)`;
+                              borderStyle = `2px solid ${groupColorData.hsl}`;
+                              boxShadowColor = `hsla(${groupColorData.hue}, 60%, 50%, 0.8)`;
+                            } else {
+                              overlayColor = 'rgba(201, 169, 98, 0.5)';
+                              borderStyle = '2px solid #c9a962';
+                              boxShadowColor = 'rgba(201, 169, 98, 0.8)';
+                            }
                             textColor = '#fff';
-                            boxShadowColor = hasGroup ? 'rgba(155, 89, 182, 0.8)' : 'rgba(201, 169, 98, 0.8)';
                           } else {
                             overlayColor = 'transparent';
                             borderStyle = `1px solid ${isLight ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)'}`;
