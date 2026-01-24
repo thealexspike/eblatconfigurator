@@ -4192,6 +4192,35 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
         };
       });
       
+      // Build tiles data (slabs to purchase)
+      const tilesData = tiles.map((tile, idx) => {
+        const color = getColorById(tile.colorId);
+        const format = tile.format;
+        const materialType = getMaterialType(tile.colorId);
+        const materialTypeObj = library.materialTypes.find(mt => mt.id === materialType);
+        const manufacturer = library.manufacturers.find(m => m.id === color?.manufacturer);
+        
+        return {
+          number: idx + 1,
+          materialType: materialTypeObj?.name || materialType || '-',
+          manufacturer: manufacturer?.name || '-',
+          colorName: color?.name || 'N/A',
+          dimensions: format ? `${format.length}×${format.width}` : '-',
+          thickness: tile.thickness || format?.thickness || '-',
+        };
+      });
+      
+      // Group tiles by material/manufacturer/color/dimensions/thickness for summary
+      const tilesSummary = {};
+      tilesData.forEach(tile => {
+        const key = `${tile.materialType}|${tile.manufacturer}|${tile.colorName}|${tile.dimensions}|${tile.thickness}`;
+        if (!tilesSummary[key]) {
+          tilesSummary[key] = { ...tile, count: 0 };
+        }
+        tilesSummary[key].count++;
+      });
+      const tilesGrouped = Object.values(tilesSummary);
+      
       const requestData = {
         projectName: project?.name || 'Proiect fără nume',
         projectDescription: project?.description || '',
@@ -4209,6 +4238,8 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
         backsplashAtypical: backsplashAtypicalLength > 0 ? parseFloat(backsplashAtypicalLength.toFixed(2)) : null,
         // Detailed pieces
         pieces: piecesData,
+        // Tiles/slabs to purchase (grouped)
+        tilesGrouped,
         // Images
         preview3DImage,
         footerImage,
