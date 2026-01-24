@@ -4175,7 +4175,6 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
       // Build pieces data from computed layout (has correct dimensions after rotation)
       const piecesData = pieces.map(p => {
         const color = getColorById(p.colorId);
-        const format = getFormatById(p.formatId);
         const materialType = getMaterialType(p.colorId);
         const materialTypeObj = library.materialTypes.find(mt => mt.id === materialType);
         
@@ -4187,8 +4186,7 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
           depth: p.pieceH,
           materialType: materialTypeObj?.name || materialType || '-',
           colorName: color?.name || 'N/A',
-          thickness: format?.thickness || '-',
-          formatSize: format ? `${format.length}×${format.width}` : '-',
+          thickness: p.thickness || '-',
         };
       });
       
