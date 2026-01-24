@@ -2965,6 +2965,12 @@ function Configurator({ project, onBack }) {
         const groupPos = pending.position;
         const groupRotRad = newRot * Math.PI / 180;
         
+        console.log('GROUP ROTATE DEBUG:', {
+          groupPos,
+          groupRotDeg: newRot,
+          groupRotRad
+        });
+        
         // Update all group member meshes
         elements.filter(e => e.groupId === selectedGroupId).forEach(el => {
           const mesh = meshesRef.current[el.id];
@@ -2978,6 +2984,13 @@ function Configurator({ project, onBack }) {
           const worldX = groupPos.x + localX * Math.cos(groupRotRad) - localZ * Math.sin(groupRotRad);
           const worldZ = groupPos.z + localX * Math.sin(groupRotRad) + localZ * Math.cos(groupRotRad);
           const worldRot = localRot + newRot;
+          
+          console.log('ELEMENT:', {
+            id: el.id.slice(0,6),
+            localOffset: { x: localX.toFixed(3), z: localZ.toFixed(3) },
+            calculatedWorld: { x: worldX.toFixed(3), z: worldZ.toFixed(3) },
+            meshBefore: { x: mesh.position.x.toFixed(3), z: mesh.position.z.toFixed(3) }
+          });
           
           mesh.position.x = worldX;
           mesh.position.z = worldZ;
