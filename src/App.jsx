@@ -2603,14 +2603,27 @@ function Configurator({ project, onBack }) {
       setSaveStatus('saving');
       
       try {
-        const { error } = await supabase
+        // Try saving with groups first
+        let { error } = await supabase
           .from('projects')
           .update({ 
             elements,
-            groups, // Save groups too
+            groups,
             updated_at: new Date().toISOString() 
           })
           .eq('id', project.id);
+        
+        // If groups column doesn't exist, save without it
+        if (error?.code === 'PGRST204') {
+          const result = await supabase
+            .from('projects')
+            .update({ 
+              elements,
+              updated_at: new Date().toISOString() 
+            })
+            .eq('id', project.id);
+          error = result.error;
+        }
         
         if (error) throw error;
         setSaveStatus('saved');
@@ -2638,6 +2651,10 @@ function Configurator({ project, onBack }) {
   useEffect(() => {
     window.selectElement = (id, { ctrlKey = false, shiftKey = false } = {}) => {
       handleElementSelect(id, { ctrlKey, shiftKey });
+    };
+    
+    window.deselectAll = () => {
+      setSelectedIds([]);
     };
     
     window.getSelectedIds = () => selectedIds;
@@ -2948,11 +2965,6 @@ function Configurator({ project, onBack }) {
         const groupPos = pending.position;
         const groupRotRad = newRot * Math.PI / 180;
         
-        // Debug log
-        console.log('=== Group rotation ===');
-        console.log('Group center:', groupPos);
-        console.log('Group rotation (deg):', newRot);
-        
         // Update all group member meshes
         elements.filter(e => e.groupId === selectedGroupId).forEach(el => {
           const mesh = meshesRef.current[el.id];
@@ -2966,13 +2978,6 @@ function Configurator({ project, onBack }) {
           const worldX = groupPos.x + localX * Math.cos(groupRotRad) - localZ * Math.sin(groupRotRad);
           const worldZ = groupPos.z + localX * Math.sin(groupRotRad) + localZ * Math.cos(groupRotRad);
           const worldRot = localRot + newRot;
-          
-          console.log(`Element ${el.id.slice(0,8)}:`, {
-            localOffset: { x: localX, z: localZ },
-            localRot,
-            worldPos: { x: worldX.toFixed(3), z: worldZ.toFixed(3) },
-            worldRot
-          });
           
           mesh.position.x = worldX;
           mesh.position.z = worldZ;
@@ -3090,6 +3095,7 @@ function Configurator({ project, onBack }) {
     
     return () => {
       delete window.selectElement;
+      delete window.deselectAll;
       delete window.getSelectedIds;
       delete window.getCurrentTool;
       delete window.moveElement;
@@ -3303,8 +3309,11 @@ function Configurator({ project, onBack }) {
             draggedElementId = hitElementId;
           }
         } else {
-          // Clicked on empty space - start orbit if no element hit
-          // This allows dragging in empty space for orbit
+          // Clicked on empty space - deselect all in select mode
+          const currentTool = window.getCurrentTool?.() || 'select';
+          if (currentTool === 'select' && !e.ctrlKey && !e.metaKey) {
+            window.deselectAll?.();
+          }
         }
       }
     };
@@ -3638,8 +3647,11 @@ function Configurator({ project, onBack }) {
       const wasSelected = prevEl?._wasSelected || false;
       const selectionChanged = prevEl && (shouldHighlight !== wasSelected);
       
+      // Check if groupId changed (affects highlight color)
+      const groupIdChanged = prevEl && (prevEl.groupId !== el.groupId);
+      
       // If only position/rotation changed, just update the mesh transform
-      if (!isNew && !geometryChanged && !selectionChanged && meshesRef.current[el.id]) {
+      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         const worldPos = getWorldPosition(el);
         const worldRot = getWorldRotation(el);
@@ -3653,8 +3665,8 @@ function Configurator({ project, onBack }) {
       // (so the colored highlights work correctly)
       const hasWaterfall = el.waterfallLeft || el.waterfallRight;
       
-      // If only selection changed and NO waterfall, update outline without recreating
-      if (!isNew && !geometryChanged && selectionChanged && !hasWaterfall && meshesRef.current[el.id]) {
+      // If only selection or groupId changed and NO waterfall, update outline without recreating
+      if (!isNew && !geometryChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         
         // Remove existing outlines (need to collect parent-child pairs)
