@@ -2622,7 +2622,7 @@ function Configurator({ project, onBack }) {
     const camera = new THREE.PerspectiveCamera(50, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     renderer.setSize(canvas.clientWidth, canvas.clientHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -4071,7 +4071,13 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
   const getFormatById = (formatId) => library.formats.find(f => f.id === formatId);
   
   // Use the shared computeLayout function - SINGLE SOURCE OF TRUTH
-  const { pieces, tiles } = useMemo(() => computeLayout(elements, library), [elements, library]);
+  const { pieces: rawPieces, tiles } = useMemo(() => computeLayout(elements, library), [elements, library]);
+  
+  // Add sequential numbering to pieces (01, 02, 03, ...)
+  const pieces = rawPieces.map((p, idx) => ({
+    ...p,
+    pieceNumber: String(idx + 1).padStart(2, '0'),
+  }));
   
   // Early return AFTER hooks
   if (elements.length === 0) return null;
@@ -4114,18 +4120,6 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
     tilesByMaterial[materialType].push({ ...tile, originalIndex: i });
   });
   
-  // Capture canvas as image
-  const captureCanvas = () => {
-    try {
-      if (canvasRef?.current) {
-        return canvasRef.current.toDataURL('image/png');
-      }
-    } catch (e) {
-      console.error('Error capturing canvas:', e);
-    }
-    return null;
-  };
-  
   // Load html2canvas dynamically and capture footer
   const captureFooter = async () => {
     try {
@@ -4161,22 +4155,37 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
     setQuoteStatus(null);
     
     try {
-      // Capture images
-      const preview3DImage = captureCanvas();
+      // Capture images - for 3D we need to get the WebGL canvas
+      let preview3DImage = null;
+      try {
+        // Find the WebGL canvas inside the container
+        const container = canvasRef?.current;
+        if (container) {
+          const webglCanvas = container.querySelector('canvas');
+          if (webglCanvas) {
+            preview3DImage = webglCanvas.toDataURL('image/png');
+          }
+        }
+      } catch (e) {
+        console.error('Error capturing 3D preview:', e);
+      }
+      
       const footerImage = await captureFooter();
       
-      // Build pieces data with full details
-      const piecesData = elements.map(el => {
-        const color = getColorById(el.colorId);
-        const format = getFormatById(el.formatId);
-        const materialType = getMaterialType(el.colorId);
+      // Build pieces data from computed layout (has correct dimensions after rotation)
+      const piecesData = pieces.map(p => {
+        const color = getColorById(p.colorId);
+        const format = getFormatById(p.formatId);
+        const materialType = getMaterialType(p.colorId);
         const materialTypeObj = library.materialTypes.find(mt => mt.id === materialType);
         
         return {
-          type: el.type,
-          width: el.width,
-          depth: el.depth,
-          materialType: materialTypeObj?.name || materialType,
+          number: p.pieceNumber,
+          type: p.pieceType === 'slab' ? 'island' : 'backsplash',
+          // Use pieceW and pieceH which are the actual dimensions on tile after rotation
+          width: p.pieceW,
+          depth: p.pieceH,
+          materialType: materialTypeObj?.name || materialType || '-',
           colorName: color?.name || 'N/A',
           thickness: format?.thickness || '-',
           formatSize: format ? `${format.length}×${format.width}` : '-',
@@ -4491,8 +4500,10 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
                                     {exceeds && '⚠️ '}
                                     {isLeftWaterfall && isSelected && '◀ '}
                                     {isRightWaterfall && isSelected && '▶ '}
-                                    {p.pieceW}×{p.pieceH}
+                                    <strong style={{ color: '#c9a962' }}>{p.pieceNumber}</strong> {p.pieceW}×{p.pieceH}
                                   </span>
+                                ) : pieceWpx > 25 && pieceHpx > 12 ? (
+                                  <span style={{ color: '#c9a962', fontWeight: 600 }}>{p.pieceNumber}</span>
                                 ) : (exceeds && pieceWpx > 20 ? '⚠️' : '')}
                               </div>
                             </div>
