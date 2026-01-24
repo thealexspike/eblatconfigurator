@@ -2945,31 +2945,37 @@ function Configurator({ project, onBack }) {
         
         pendingGroupTransforms[selectedGroupId] = { ...pending, rotation: newRot };
         
+        const groupPos = pending.position;
+        const groupRotRad = newRot * Math.PI / 180;
+        
         // Debug log
-        console.log('Group rotation:', {
-          groupId: selectedGroupId,
-          groupPos: pending.position,
-          newGroupRot: newRot,
-        });
+        console.log('=== Group rotation ===');
+        console.log('Group center:', groupPos);
+        console.log('Group rotation (deg):', newRot);
         
         // Update all group member meshes
         elements.filter(e => e.groupId === selectedGroupId).forEach(el => {
           const mesh = meshesRef.current[el.id];
           if (!mesh) return;
           
-          const worldPos = getWorldPosDuringDrag(el);
-          const worldRot = getWorldRotDuringDrag(el);
+          const localX = el.localOffset?.x || 0;
+          const localZ = el.localOffset?.z || 0;
+          const localRot = el.localRotation || 0;
           
-          console.log('Element update:', {
-            elId: el.id,
-            localOffset: el.localOffset,
-            localRotation: el.localRotation,
-            worldPos,
-            worldRot,
+          // Calculate world position: rotate localOffset by group rotation
+          const worldX = groupPos.x + localX * Math.cos(groupRotRad) - localZ * Math.sin(groupRotRad);
+          const worldZ = groupPos.z + localX * Math.sin(groupRotRad) + localZ * Math.cos(groupRotRad);
+          const worldRot = localRot + newRot;
+          
+          console.log(`Element ${el.id.slice(0,8)}:`, {
+            localOffset: { x: localX, z: localZ },
+            localRot,
+            worldPos: { x: worldX.toFixed(3), z: worldZ.toFixed(3) },
+            worldRot
           });
           
-          mesh.position.x = worldPos.x;
-          mesh.position.z = worldPos.z;
+          mesh.position.x = worldX;
+          mesh.position.z = worldZ;
           mesh.rotation.y = worldRot * Math.PI / 180;
         });
         
