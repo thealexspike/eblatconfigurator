@@ -2554,6 +2554,12 @@ function Configurator({ project, onBack }) {
   const meshesRef = useRef({});
   const orbitRef = useRef({ theta: Math.PI / 4, phi: Math.PI / 3, radius: 6 });
   const saveTimeoutRef = useRef(null);
+  
+  // Refs for pending transforms during drag (persists across re-renders)
+  const pendingGroupTransformsRef = useRef({});
+  const pendingElementTransformsRef = useRef({});
+  const rawPositionsRef = useRef({});
+  const rawRotationsRef = useRef({});
 
   // Auto-save to Supabase (debounced)
   useEffect(() => {
@@ -2610,11 +2616,11 @@ function Configurator({ project, onBack }) {
     
     window.getCurrentTool = () => tool;
     
-    // Store pending transforms during drag (for performance)
-    let pendingGroupTransforms = {}; // { groupId: { position: {x,z}, rotation } }
-    let pendingElementTransforms = {}; // { elementId: { position: {x,z}, rotation } } for ungrouped elements
-    let rawPositions = {};
-    let rawRotations = {};
+    // Use refs for pending transforms (persists across re-renders)
+    const pendingGroupTransforms = pendingGroupTransformsRef.current;
+    const pendingElementTransforms = pendingElementTransformsRef.current;
+    const rawPositions = rawPositionsRef.current;
+    const rawRotations = rawRotationsRef.current;
     
     // Get the groupId if all selected elements are in the same group
     const getSelectedGroupId = () => {
@@ -2667,7 +2673,7 @@ function Configurator({ project, onBack }) {
         const group = groups[selectedGroupId];
         const pending = pendingGroupTransforms[selectedGroupId] || { 
           position: { ...group.position }, 
-          rotation: group.rotation 
+          rotation: group.rotation || 0
         };
         
         const baseX = rawPositions[selectedGroupId]?.x ?? pending.position.x;
@@ -2854,9 +2860,10 @@ function Configurator({ project, onBack }) {
       // Commit group transforms
       if (Object.keys(pendingGroupTransforms).length > 0) {
         hasChanges = true;
+        const groupUpdates = { ...pendingGroupTransforms };
         setGroups(prev => {
           const updated = { ...prev };
-          Object.entries(pendingGroupTransforms).forEach(([groupId, transform]) => {
+          Object.entries(groupUpdates).forEach(([groupId, transform]) => {
             if (updated[groupId]) {
               updated[groupId] = { ...updated[groupId], ...transform };
             }
@@ -2868,8 +2875,9 @@ function Configurator({ project, onBack }) {
       // Commit element transforms (for ungrouped elements)
       if (Object.keys(pendingElementTransforms).length > 0) {
         hasChanges = true;
+        const elementUpdates = { ...pendingElementTransforms };
         setElements(prev => prev.map(el => {
-          const pending = pendingElementTransforms[el.id];
+          const pending = elementUpdates[el.id];
           if (pending) {
             return { 
               ...el, 
@@ -2881,12 +2889,11 @@ function Configurator({ project, onBack }) {
         }));
       }
       
-      if (hasChanges) {
-        pendingGroupTransforms = {};
-        pendingElementTransforms = {};
-        rawPositions = {};
-        rawRotations = {};
-      }
+      // Clear refs
+      pendingGroupTransformsRef.current = {};
+      pendingElementTransformsRef.current = {};
+      rawPositionsRef.current = {};
+      rawRotationsRef.current = {};
     };
     
     return () => {
