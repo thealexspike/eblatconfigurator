@@ -4352,17 +4352,16 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
 
       {/* Tile Layout */}
       <div style={{ flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }}>
+        {/* Inner div that fits exactly to content - this is what we capture */}
         <div 
           ref={tilesAreaRef}
           style={{ 
-            display: 'flex', 
+            display: 'inline-flex', // Shrinks to fit content
             gap: '15px', 
             flexWrap: 'nowrap', 
             alignItems: 'flex-start', 
-            paddingTop: '5px',
-            paddingRight: '20px', // Padding to not cut tiles
-            paddingBottom: '5px',
-            background: '#0d0d0d', // Ensure background for screenshot
+            padding: '8px 12px', // Uniform padding
+            background: '#0d0d0d',
           }}
         >
           {Object.entries(tilesByMaterial).map(([materialType, materialTiles]) => (
