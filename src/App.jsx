@@ -2711,6 +2711,9 @@ function Configurator({ project, onBack }) {
       });
     };
     
+    // Track raw rotation for smooth dragging with snap
+    let rawRotations = {};
+    
     window.rotateElement = (id, dx) => {
       if (selectedIds.length <= 1) {
         // Single element rotation
@@ -2718,26 +2721,29 @@ function Configurator({ project, onBack }) {
         const el = elements.find(e => e.id === id);
         if (!mesh || !el) return;
         
-        let newRotation = (pendingPositions[id]?.rotation ?? el.rotation ?? 0) + dx * 0.5;
+        // Accumulate raw rotation
+        const baseRotation = rawRotations[id] ?? pendingPositions[id]?.rotation ?? el.rotation ?? 0;
+        const rawRotation = baseRotation + dx * 0.5;
+        rawRotations[id] = rawRotation;
         
+        // Apply snap for display
+        let displayRotation = rawRotation;
         if (snapEnabled) {
-          newRotation = Math.round(newRotation / 45) * 45;
+          displayRotation = Math.round(rawRotation / 45) * 45;
         }
         
-        pendingPositions[id] = { ...(pendingPositions[id] || {}), rotation: newRotation };
-        mesh.rotation.y = (newRotation * Math.PI) / 180;
+        pendingPositions[id] = { ...(pendingPositions[id] || {}), rotation: displayRotation };
+        mesh.rotation.y = (displayRotation * Math.PI) / 180;
       } else {
         // Multi-element rotation around geometric center
         const angleDelta = dx * 0.5;
-        const snappedAngle = snapEnabled ? Math.round(angleDelta / 45) * 45 : angleDelta;
-        if (Math.abs(snappedAngle) < 0.1) return;
         
         // Calculate center of selected elements
         const selectedEls = elements.filter(e => selectedIds.includes(e.id));
         const centerX = selectedEls.reduce((sum, e) => sum + (pendingPositions[e.id]?.x ?? e.position?.x ?? 0), 0) / selectedEls.length;
         const centerZ = selectedEls.reduce((sum, e) => sum + (pendingPositions[e.id]?.z ?? e.position?.z ?? 0), 0) / selectedEls.length;
         
-        const angleRad = (snappedAngle * Math.PI) / 180;
+        const angleRad = (angleDelta * Math.PI) / 180;
         
         selectedIds.forEach(elId => {
           const mesh = meshesRef.current[elId];
@@ -2752,20 +2758,27 @@ function Configurator({ project, onBack }) {
           const newX = px * Math.cos(angleRad) - pz * Math.sin(angleRad) + centerX;
           const newZ = px * Math.sin(angleRad) + pz * Math.cos(angleRad) + centerZ;
           
-          // Update rotation
-          const currentRotation = pendingPositions[elId]?.rotation ?? el.rotation ?? 0;
-          const newRotation = currentRotation + snappedAngle;
+          // Accumulate raw rotation
+          const baseRotation = rawRotations[elId] ?? pendingPositions[elId]?.rotation ?? el.rotation ?? 0;
+          const rawRotation = baseRotation + angleDelta;
+          rawRotations[elId] = rawRotation;
+          
+          // Apply snap for display
+          let displayRotation = rawRotation;
+          if (snapEnabled) {
+            displayRotation = Math.round(rawRotation / 45) * 45;
+          }
           
           pendingPositions[elId] = { 
             ...(pendingPositions[elId] || {}), 
             x: newX, 
             z: newZ, 
-            rotation: newRotation 
+            rotation: displayRotation 
           };
           
           mesh.position.x = newX;
           mesh.position.z = newZ;
-          mesh.rotation.y = (newRotation * Math.PI) / 180;
+          mesh.rotation.y = (displayRotation * Math.PI) / 180;
         });
       }
     };
@@ -2792,6 +2805,7 @@ function Configurator({ project, onBack }) {
         }));
         pendingPositions = {};
         rawPositions = {};  // Reset raw positions too
+        rawRotations = {}; // Reset raw rotations too
       }
     };
     
@@ -3160,6 +3174,113 @@ function Configurator({ project, onBack }) {
     };
   }, []);
 
+  // Gizmo ref
+  const gizmoRef = useRef(null);
+
+  // Update gizmo based on tool and selection
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    
+    // Remove existing gizmo
+    if (gizmoRef.current) {
+      sceneRef.current.remove(gizmoRef.current);
+      gizmoRef.current = null;
+    }
+    
+    // Don't show gizmo if nothing selected
+    if (selectedIds.length === 0) return;
+    
+    // Calculate center of selection
+    const selectedEls = elements.filter(e => selectedIds.includes(e.id));
+    if (selectedEls.length === 0) return;
+    
+    const centerX = selectedEls.reduce((sum, e) => sum + (e.position?.x || 0), 0) / selectedEls.length;
+    const centerZ = selectedEls.reduce((sum, e) => sum + (e.position?.z || 0), 0) / selectedEls.length;
+    
+    // Get average Y position (top of elements)
+    const avgY = selectedEls.reduce((sum, e) => {
+      const placementHeight = (e.placementHeight || 90) / 100;
+      const thickness = (e.thickness || 12) / 1000;
+      return sum + placementHeight + thickness;
+    }, 0) / selectedEls.length;
+    
+    const gizmoGroup = new THREE.Group();
+    gizmoGroup.position.set(centerX, avgY, centerZ);
+    
+    if (tool === 'move') {
+      // Create move gizmo (3 arrows for X, Y, Z axes)
+      const arrowLength = 0.4;
+      const arrowHeadLength = 0.1;
+      const arrowHeadWidth = 0.05;
+      
+      // X axis (red)
+      const xDir = new THREE.Vector3(1, 0, 0);
+      const xArrow = new THREE.ArrowHelper(xDir, new THREE.Vector3(0, 0, 0), arrowLength, 0xff4444, arrowHeadLength, arrowHeadWidth);
+      xArrow.line.material.depthTest = false;
+      xArrow.cone.material.depthTest = false;
+      xArrow.renderOrder = 999;
+      gizmoGroup.add(xArrow);
+      
+      // Y axis (green)
+      const yDir = new THREE.Vector3(0, 1, 0);
+      const yArrow = new THREE.ArrowHelper(yDir, new THREE.Vector3(0, 0, 0), arrowLength, 0x44ff44, arrowHeadLength, arrowHeadWidth);
+      yArrow.line.material.depthTest = false;
+      yArrow.cone.material.depthTest = false;
+      yArrow.renderOrder = 999;
+      gizmoGroup.add(yArrow);
+      
+      // Z axis (blue)
+      const zDir = new THREE.Vector3(0, 0, 1);
+      const zArrow = new THREE.ArrowHelper(zDir, new THREE.Vector3(0, 0, 0), arrowLength, 0x4444ff, arrowHeadLength, arrowHeadWidth);
+      zArrow.line.material.depthTest = false;
+      zArrow.cone.material.depthTest = false;
+      zArrow.renderOrder = 999;
+      gizmoGroup.add(zArrow);
+      
+    } else if (tool === 'rotate') {
+      // Create rotate gizmo (3 circles/tori for X, Y, Z rotation)
+      const torusRadius = 0.35;
+      const tubeRadius = 0.015;
+      const segments = 32;
+      
+      // Y rotation (green ring - horizontal)
+      const yTorusGeo = new THREE.TorusGeometry(torusRadius, tubeRadius, 8, segments);
+      const yTorusMat = new THREE.MeshBasicMaterial({ color: 0x44ff44, depthTest: false, transparent: true, opacity: 0.8 });
+      const yTorus = new THREE.Mesh(yTorusGeo, yTorusMat);
+      yTorus.rotation.x = Math.PI / 2; // Horizontal
+      yTorus.renderOrder = 999;
+      gizmoGroup.add(yTorus);
+      
+      // X rotation (red ring - vertical along X)
+      const xTorusGeo = new THREE.TorusGeometry(torusRadius, tubeRadius, 8, segments);
+      const xTorusMat = new THREE.MeshBasicMaterial({ color: 0xff4444, depthTest: false, transparent: true, opacity: 0.8 });
+      const xTorus = new THREE.Mesh(xTorusGeo, xTorusMat);
+      xTorus.rotation.y = Math.PI / 2; // Vertical along X
+      xTorus.renderOrder = 999;
+      gizmoGroup.add(xTorus);
+      
+      // Z rotation (blue ring - vertical along Z)
+      const zTorusGeo = new THREE.TorusGeometry(torusRadius, tubeRadius, 8, segments);
+      const zTorusMat = new THREE.MeshBasicMaterial({ color: 0x4444ff, depthTest: false, transparent: true, opacity: 0.8 });
+      const zTorus = new THREE.Mesh(zTorusGeo, zTorusMat);
+      // Default orientation is vertical along Z
+      zTorus.renderOrder = 999;
+      gizmoGroup.add(zTorus);
+    }
+    
+    if (gizmoGroup.children.length > 0) {
+      sceneRef.current.add(gizmoGroup);
+      gizmoRef.current = gizmoGroup;
+    }
+    
+    return () => {
+      if (gizmoRef.current && sceneRef.current) {
+        sceneRef.current.remove(gizmoRef.current);
+        gizmoRef.current = null;
+      }
+    };
+  }, [tool, selectedIds, elements]);
+
   // Use the shared computeLayout function for texture UV mapping
   const layoutData = useMemo(() => computeLayout(elements, library), [elements, library]);
   const pieceLayout = layoutData.piecesByKey;
@@ -3213,7 +3334,7 @@ function Configurator({ project, onBack }) {
       const currentHash = getGeometryHash(el);
       const geometryChanged = prevHash !== currentHash;
       const isNew = !prevEl;
-      const isSelected = selectedId === el.id;
+      const isSelected = selectedIds.includes(el.id);
       const wasSelected = prevEl?._wasSelected || false;
       const selectionChanged = prevEl && (isSelected !== wasSelected);
       
@@ -3251,11 +3372,13 @@ function Configurator({ project, onBack }) {
         
         // Add outline if selected (MeshBasicMaterial doesn't have emissive, so just outline)
         if (isSelected) {
+          // Purple for group, gold for individual selection
+          const outlineColor = el.groupId ? 0x9b59b6 : 0xc9a962;
           mesh.traverse((child) => {
             if (child.isMesh && child.geometry) {
               const edges = new THREE.EdgesGeometry(child.geometry, 15);
               const lineMaterial = new THREE.LineBasicMaterial({ 
-                color: 0xc9a962, 
+                color: outlineColor, 
                 linewidth: 2,
                 depthTest: false,
                 transparent: true,
@@ -3382,11 +3505,16 @@ function Configurator({ project, onBack }) {
       }
 
       // Selection highlight with outline (MeshBasicMaterial doesn't have emissive)
-      if (selectedId === el.id) {
+      const isSelected = selectedIds.includes(el.id);
+      const isInGroup = el.groupId && elements.some(e => e.groupId === el.groupId && selectedIds.includes(e.id));
+      
+      if (isSelected || isInGroup) {
         // Add outline edges for selection
         const edges = new THREE.EdgesGeometry(geometry, 15);
+        // Purple for group, gold for individual selection
+        const outlineColor = el.groupId ? 0x9b59b6 : 0xc9a962;
         const lineMaterial = new THREE.LineBasicMaterial({ 
-          color: 0xc9a962, 
+          color: outlineColor, 
           linewidth: 2,
           depthTest: false,
           transparent: true,
@@ -3409,7 +3537,7 @@ function Configurator({ project, onBack }) {
           const wfHasTexture = colorData.texture && wfLayout;
           
           // Determine highlight color based on side
-          const isSelectedElement = selectedId === el.id;
+          const isSelectedElement = selectedIds.includes(el.id);
           let highlightColor = null;
           if (isSelectedElement) {
             highlightColor = side === 'left' ? 0x4a90d9 : 0x5cb85c;
@@ -3548,10 +3676,10 @@ function Configurator({ project, onBack }) {
     // This needs to happen for ALL elements, not just recreated ones
     const newPrevElements = {};
     elements.forEach(el => {
-      newPrevElements[el.id] = { ...el, _wasSelected: selectedId === el.id };
+      newPrevElements[el.id] = { ...el, _wasSelected: selectedIds.includes(el.id) };
     });
     prevElementsRef.current = newPrevElements;
-  }, [elements, selectedId, library, pieceLayout]);
+  }, [elements, selectedIds, library, pieceLayout]);
 
   // Helper functions
   const getColorById = (id) => library.colors.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
@@ -4527,8 +4655,8 @@ function Configurator({ project, onBack }) {
       <SlabCalculatorFooter 
         elements={elements} 
         library={library} 
-        selectedId={selectedId} 
-        setSelectedId={setSelectedId}
+        selectedIds={selectedIds}
+        handleElementSelect={handleElementSelect}
         project={project}
         user={user}
         canvasRef={canvasRef}
@@ -4541,12 +4669,15 @@ function Configurator({ project, onBack }) {
 // SLAB CALCULATOR FOOTER COMPONENT
 // ============================================
 
-function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, project, user, canvasRef }) {
+function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, canvasRef }) {
   const [sendingQuote, setSendingQuote] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState(null); // 'success' | 'error' | null
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const footerRef = useRef(null);
   const tilesAreaRef = useRef(null);
+  
+  // For backward compat
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   
   const getColorById = (id) => library.colors.find(c => c.id === id) || { name: 'N/A', color: '#666' };
   
@@ -4939,7 +5070,9 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
                           const pieceWpx = p.pieceW * uniformScale;
                           const pieceHpx = p.pieceH * uniformScale;
                           
-                          const isSelected = p.elementId === selectedId;
+                          const isSelected = selectedIds.includes(p.elementId);
+                          const pieceElement = elements.find(e => e.id === p.elementId);
+                          const isInGroup = pieceElement?.groupId && elements.some(e => e.groupId === pieceElement.groupId && selectedIds.includes(e.id));
                           const exceeds = p.exceeds;
                           const isLeftWaterfall = p.waterfallSide === 'left';
                           const isRightWaterfall = p.waterfallSide === 'right';
@@ -4966,11 +5099,15 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
                             borderStyle = '2px solid #5cb85c';
                             textColor = '#fff';
                             boxShadowColor = 'rgba(92, 184, 92, 0.8)';
-                          } else if (isSelected) {
-                            overlayColor = 'rgba(201, 169, 98, 0.5)';
-                            borderStyle = '2px solid #c9a962';
+                          } else if (isSelected || isInGroup) {
+                            // Purple for group, gold for individual
+                            const groupColor = pieceElement?.groupId ? 'rgba(155, 89, 182, 0.5)' : 'rgba(201, 169, 98, 0.5)';
+                            const groupBorder = pieceElement?.groupId ? '#9b59b6' : '#c9a962';
+                            const groupShadow = pieceElement?.groupId ? 'rgba(155, 89, 182, 0.8)' : 'rgba(201, 169, 98, 0.8)';
+                            overlayColor = groupColor;
+                            borderStyle = `2px solid ${groupBorder}`;
                             textColor = '#fff';
-                            boxShadowColor = 'rgba(201, 169, 98, 0.8)';
+                            boxShadowColor = groupShadow;
                           } else {
                             overlayColor = 'transparent';
                             borderStyle = `1px solid ${isLight ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)'}`;
@@ -4981,7 +5118,7 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
                           return (
                             <div 
                               key={j} 
-                              onClick={() => setSelectedId(p.elementId)}
+                              onClick={(e) => handleElementSelect(p.elementId, { ctrlKey: e.ctrlKey || e.metaKey, shiftKey: e.shiftKey })}
                               style={{
                                 position: 'absolute', 
                                 left: pieceLeftPx, 
