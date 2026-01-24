@@ -1645,14 +1645,40 @@ function MaterialLibrary({ onClose }) {
     setEditingItem(null);
   };
 
-  const deleteItem = (tab, id) => {
+  // Archive item instead of deleting (for colors)
+  const archiveItem = (tab, id) => {
+    if (tab === 'colors') {
+      // Archive color - keep it but mark as archived
+      updateLibrary(tab, library[tab].map(item => 
+        item.id === id ? { ...item, archived: true } : item
+      ));
+    } else {
+      // For other items, delete directly (or could implement archive for all)
+      updateLibrary(tab, library[tab].filter(item => item.id !== id));
+    }
+    setDeleteConfirm(null);
+  };
+
+  // Permanently delete item (only for archived items)
+  const permanentDeleteItem = (tab, id) => {
     updateLibrary(tab, library[tab].filter(item => item.id !== id));
     setDeleteConfirm(null);
   };
 
+  // Restore archived item
+  const restoreItem = (tab, id) => {
+    updateLibrary(tab, library[tab].map(item => 
+      item.id === id ? { ...item, archived: false } : item
+    ));
+  };
+
+  // Legacy alias for compatibility
+  const deleteItem = archiveItem;
+
   const tabs = [
     { id: 'materialTypes', label: 'Tipuri Material' },
     { id: 'catalog', label: 'Catalog Complet' },
+    { id: 'archive', label: 'Arhivă' },
   ];
 
   const handleExport = () => {
@@ -1714,14 +1740,18 @@ function MaterialLibrary({ onClose }) {
             </div>
             
             {typeManufacturers.map(mfr => {
-              const mfrColors = library.colors.filter(c => c.manufacturer === mfr.id);
+              const mfrColors = library.colors.filter(c => c.manufacturer === mfr.id && !c.archived);
+              const archivedCount = library.colors.filter(c => c.manufacturer === mfr.id && c.archived).length;
               
               return (
                 <div key={mfr.id} style={{ marginBottom: '16px', marginLeft: '12px', padding: '16px', background: '#111', borderRadius: '8px', border: '1px solid #2a2a2a' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                     <div>
                       <div style={{ fontWeight: 600, fontSize: '15px' }}>{mfr.name}</div>
-                      <div style={{ fontSize: '11px', color: '#666' }}>{mfrColors.length} culori</div>
+                      <div style={{ fontSize: '11px', color: '#666' }}>
+                        {mfrColors.length} culori
+                        {archivedCount > 0 && <span style={{ color: '#888' }}> ({archivedCount} arhivate)</span>}
+                      </div>
                     </div>
                     <div style={{ display: 'flex', gap: '6px' }}>
                       <button onClick={() => { setNewItem({ manufacturer: mfr.id }); setAddMode('color'); setShowAddModal(true); }} style={{ ...secondaryBtnStyle, fontSize: '11px', padding: '4px 10px' }}>+ Culoare</button>
@@ -1896,6 +1926,111 @@ function MaterialLibrary({ onClose }) {
       })}
     </div>
   );
+
+  // Render Archive Tab
+  const renderArchive = () => {
+    const archivedColors = library.colors.filter(c => c.archived);
+    
+    if (archivedColors.length === 0) {
+      return (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#666' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>📦</div>
+          <div style={{ fontSize: '16px', marginBottom: '8px' }}>Arhiva este goală</div>
+          <div style={{ fontSize: '13px' }}>Materialele arhivate vor apărea aici</div>
+        </div>
+      );
+    }
+
+    // Group archived colors by manufacturer
+    const archivedByMfr = {};
+    archivedColors.forEach(color => {
+      const mfr = library.manufacturers.find(m => m.id === color.manufacturer);
+      const mfrName = mfr?.name || 'Necunoscut';
+      if (!archivedByMfr[mfrName]) archivedByMfr[mfrName] = [];
+      archivedByMfr[mfrName].push(color);
+    });
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ 
+          background: 'rgba(201,169,98,0.1)', 
+          border: '1px solid rgba(201,169,98,0.3)', 
+          borderRadius: '8px', 
+          padding: '12px 16px',
+          fontSize: '13px',
+          color: '#c9a962'
+        }}>
+          📦 Materialele arhivate rămân disponibile pentru proiectele existente, dar nu pot fi selectate pentru piese noi.
+        </div>
+
+        {Object.entries(archivedByMfr).map(([mfrName, colors]) => (
+          <div key={mfrName} style={{ background: '#111', borderRadius: '8px', border: '1px solid #2a2a2a', padding: '16px' }}>
+            <div style={{ fontWeight: 600, marginBottom: '12px', color: '#888' }}>{mfrName}</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+              {colors.map(color => (
+                <div 
+                  key={color.id} 
+                  style={{ 
+                    background: '#1a1a1a', 
+                    borderRadius: '8px', 
+                    padding: '12px', 
+                    border: '1px solid #333',
+                    width: '180px',
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
+                    <div style={{ 
+                      width: '40px', 
+                      height: '40px', 
+                      borderRadius: '6px',
+                      background: color.texture ? `url(${color.texture}) center/cover` : color.color,
+                      border: '1px solid #444',
+                    }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500, fontSize: '13px', color: '#999' }}>{color.name}</div>
+                      <div style={{ fontSize: '10px', color: '#555' }}>ID: {color.id}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button 
+                      onClick={() => restoreItem('colors', color.id)}
+                      style={{ 
+                        ...secondaryBtnStyle, 
+                        flex: 1, 
+                        padding: '6px', 
+                        fontSize: '11px',
+                        color: '#4a9',
+                        borderColor: '#4a9',
+                      }}
+                    >
+                      ↩ Restaurează
+                    </button>
+                    <button 
+                      onClick={() => setDeleteConfirm({ 
+                        tab: 'colors', 
+                        id: color.id, 
+                        name: color.name,
+                        permanent: true 
+                      })}
+                      style={{ 
+                        ...secondaryBtnStyle, 
+                        padding: '6px 10px', 
+                        fontSize: '11px',
+                        color: '#c96262',
+                        borderColor: '#c96262',
+                      }}
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   // Render Add Modal
   const renderAddModal = () => {
@@ -2157,21 +2292,40 @@ function MaterialLibrary({ onClose }) {
       <div style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
         {activeTab === 'materialTypes' && renderMaterialTypes()}
         {activeTab === 'catalog' && renderCatalog()}
+        {activeTab === 'archive' && renderArchive()}
       </div>
 
       {showAddModal && renderAddModal()}
       {editingItem && renderEditModal()}
       
-      {/* Delete Confirm */}
+      {/* Delete/Archive Confirm */}
       {deleteConfirm && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001 }}>
-          <div style={{ background: '#111', padding: '24px', borderRadius: '8px', maxWidth: '350px', border: '1px solid #333', textAlign: 'center' }}>
-            <div style={{ fontSize: '40px', marginBottom: '16px' }}>⚠️</div>
-            <h3 style={{ margin: '0 0 12px', color: '#fff' }}>Ștergi?</h3>
-            <p style={{ color: '#888', marginBottom: '24px' }}><strong style={{ color: '#c9a962' }}>{deleteConfirm.name}</strong></p>
+          <div style={{ background: '#111', padding: '24px', borderRadius: '8px', maxWidth: '400px', border: '1px solid #333', textAlign: 'center' }}>
+            <div style={{ fontSize: '40px', marginBottom: '16px' }}>{deleteConfirm.permanent ? '🗑️' : '📦'}</div>
+            <h3 style={{ margin: '0 0 12px', color: '#fff' }}>{deleteConfirm.permanent ? 'Ștergi permanent?' : 'Arhivezi?'}</h3>
+            <p style={{ color: '#888', marginBottom: '8px' }}><strong style={{ color: '#c9a962' }}>{deleteConfirm.name}</strong></p>
+            {!deleteConfirm.permanent && deleteConfirm.tab === 'colors' && (
+              <p style={{ color: '#666', fontSize: '12px', marginBottom: '24px' }}>
+                Materialul va fi mutat în arhivă și va rămâne disponibil pentru proiectele existente.
+              </p>
+            )}
+            {deleteConfirm.permanent && (
+              <p style={{ color: '#c96262', fontSize: '12px', marginBottom: '24px' }}>
+                ⚠️ Această acțiune este permanentă și nu poate fi anulată!
+              </p>
+            )}
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
               <button onClick={() => setDeleteConfirm(null)} style={secondaryBtnStyle}>Anulează</button>
-              <button onClick={() => deleteItem(deleteConfirm.tab, deleteConfirm.id)} style={{ ...buttonStyle, background: '#c96262' }}>Șterge</button>
+              <button 
+                onClick={() => deleteConfirm.permanent 
+                  ? permanentDeleteItem(deleteConfirm.tab, deleteConfirm.id) 
+                  : deleteItem(deleteConfirm.tab, deleteConfirm.id)
+                } 
+                style={{ ...buttonStyle, background: '#c96262' }}
+              >
+                {deleteConfirm.permanent ? 'Șterge Permanent' : 'Arhivează'}
+              </button>
             </div>
           </div>
         </div>
@@ -2256,13 +2410,18 @@ function Configurator({ project, onBack }) {
   const [library, setLibrary] = useState(loadLibrary);
   const [elements, setElementsInternal] = useState(project?.elements || []);
   const [undoHistory, setUndoHistory] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]); // Multi-select support
   const [tool, setTool] = useState('select');
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [saveStatus, setSaveStatus] = useState(null);
   const [snapIndicators, setSnapIndicators] = useState([]); // [{x, z, type}]
   const [texturePreview, setTexturePreview] = useState(null); // { texture: url, name: string }
   const [texturePreviewVisible, setTexturePreviewVisible] = useState(false); // pentru animație fade
+  const [materialWarnings, setMaterialWarnings] = useState([]); // Warnings for archived/missing materials
+  
+  // Helper for single selection (backward compatibility)
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
+  const setSelectedId = (id) => setSelectedIds(id ? [id] : []);
   
   // Load library from Supabase
   useEffect(() => {
@@ -2286,6 +2445,28 @@ function Configurator({ project, onBack }) {
             formats: data.formats || DEFAULT_LIBRARY.formats,
           };
           setLibrary(loadedLibrary);
+          
+          // Validate materials in project elements
+          if (project?.elements?.length > 0) {
+            const warnings = [];
+            project.elements.forEach(el => {
+              const color = loadedLibrary.colors.find(c => c.id === el.material);
+              if (!color) {
+                warnings.push({
+                  type: 'missing',
+                  elementName: el.name,
+                  materialId: el.material,
+                });
+              } else if (color.archived) {
+                warnings.push({
+                  type: 'archived',
+                  elementName: el.name,
+                  materialName: color.name,
+                });
+              }
+            });
+            setMaterialWarnings(warnings);
+          }
         }
       } catch (err) {
         console.error('Error loading library:', err);
@@ -2294,7 +2475,7 @@ function Configurator({ project, onBack }) {
     };
     
     fetchLibrary();
-  }, [supabase]);
+  }, [supabase, project?.elements]);
   
   // Max undo steps
   const MAX_UNDO_HISTORY = 50;
@@ -2396,9 +2577,11 @@ function Configurator({ project, onBack }) {
 
   // Expose functions to window for 3D interaction
   useEffect(() => {
-    window.selectElement = (id) => {
-      setSelectedId(id);
+    window.selectElement = (id, { ctrlKey = false, shiftKey = false } = {}) => {
+      handleElementSelect(id, { ctrlKey, shiftKey });
     };
+    
+    window.getSelectedIds = () => selectedIds;
     
     window.getCurrentTool = () => tool;
     
@@ -2406,8 +2589,8 @@ function Configurator({ project, onBack }) {
     let pendingPositions = {};  // Snapped positions (for display)
     let rawPositions = {};      // Raw positions (for snap calculation)
     
-    window.moveElement = (id, delta) => {
-      // Update mesh position directly for smooth dragging (no React re-render)
+    // Helper to move a single element
+    const moveSingleElement = (id, delta, isMainElement = false) => {
       const mesh = meshesRef.current[id];
       const el = elements.find(e => e.id === id);
       if (!mesh || !el) return;
@@ -2424,14 +2607,11 @@ function Configurator({ project, onBack }) {
       let newX = rawX;
       let newZ = rawZ;
       
-      // Snap to other elements if enabled
-      let indicators = [];
-      if (snapEnabled) {
-        const SNAP_THRESHOLD = 0.10; // 10cm snap range
-        
-        // Account for rotation when calculating dimensions
+      // Only apply snap for the main (dragged) element
+      if (isMainElement && snapEnabled) {
+        const SNAP_THRESHOLD = 0.10;
         const elRotation = (pendingPositions[id]?.rotation ?? el.rotation ?? 0) % 360;
-        const isRotated90 = Math.abs(elRotation % 180 - 90) < 5; // Check if roughly 90 or 270 degrees
+        const isRotated90 = Math.abs(elRotation % 180 - 90) < 5;
         
         let movingWidth, movingDepth;
         if (el.type === 'backsplash') {
@@ -2442,7 +2622,6 @@ function Configurator({ project, onBack }) {
           movingDepth = el.depth / 100;
         }
         
-        // Swap dimensions if rotated 90 degrees
         if (isRotated90) {
           [movingWidth, movingDepth] = [movingDepth, movingWidth];
         }
@@ -2453,11 +2632,10 @@ function Configurator({ project, onBack }) {
         const movingBack = newZ + movingDepth / 2;
         
         let snapX = null, snapZ = null;
-        let snapXType = null, snapZType = null;
-        let snapXPos = null, snapZPos = null;
         
+        // Check snap against non-selected elements only
         elements.forEach(other => {
-          if (other.id === id) return;
+          if (other.id === id || selectedIds.includes(other.id)) return;
           
           const otherX = pendingPositions[other.id]?.x ?? other.position?.x ?? 0;
           const otherZ = pendingPositions[other.id]?.z ?? other.position?.z ?? 0;
@@ -2473,7 +2651,6 @@ function Configurator({ project, onBack }) {
             otherDepth = other.depth / 100;
           }
           
-          // Swap dimensions if other element is rotated 90 degrees
           if (otherIsRotated90) {
             [otherWidth, otherDepth] = [otherDepth, otherWidth];
           }
@@ -2483,97 +2660,114 @@ function Configurator({ project, onBack }) {
           const otherFront = otherZ - otherDepth / 2;
           const otherBack = otherZ + otherDepth / 2;
           
-          // Snap X (left/right edges)
-          if (snapX === null) {
-            if (Math.abs(movingLeft - otherLeft) < SNAP_THRESHOLD) { 
-              snapX = otherLeft + movingWidth / 2; 
-              snapXType = 'edge'; 
-              snapXPos = otherLeft;
-            }
-            else if (Math.abs(movingRight - otherRight) < SNAP_THRESHOLD) { 
-              snapX = otherRight - movingWidth / 2; 
-              snapXType = 'edge'; 
-              snapXPos = otherRight;
-            }
-            else if (Math.abs(movingLeft - otherRight) < SNAP_THRESHOLD) { 
-              snapX = otherRight + movingWidth / 2; 
-              snapXType = 'adjacent'; 
-              snapXPos = otherRight;
-            }
-            else if (Math.abs(movingRight - otherLeft) < SNAP_THRESHOLD) { 
-              snapX = otherLeft - movingWidth / 2; 
-              snapXType = 'adjacent'; 
-              snapXPos = otherLeft;
-            }
-            else if (Math.abs(newX - otherX) < SNAP_THRESHOLD) { 
-              snapX = otherX; 
-              snapXType = 'center'; 
-              snapXPos = otherX;
-            }
+          // X snaps
+          if (Math.abs(movingRight - otherLeft) < SNAP_THRESHOLD && snapX === null) {
+            snapX = otherLeft - movingWidth / 2;
+          }
+          if (Math.abs(movingLeft - otherRight) < SNAP_THRESHOLD && snapX === null) {
+            snapX = otherRight + movingWidth / 2;
+          }
+          if (Math.abs(newX - otherX) < SNAP_THRESHOLD && snapX === null) {
+            snapX = otherX;
           }
           
-          // Snap Z (front/back edges)
-          if (snapZ === null) {
-            if (Math.abs(movingFront - otherFront) < SNAP_THRESHOLD) { 
-              snapZ = otherFront + movingDepth / 2; 
-              snapZType = 'edge'; 
-              snapZPos = otherFront;
-            }
-            else if (Math.abs(movingBack - otherBack) < SNAP_THRESHOLD) { 
-              snapZ = otherBack - movingDepth / 2; 
-              snapZType = 'edge'; 
-              snapZPos = otherBack;
-            }
-            else if (Math.abs(movingFront - otherBack) < SNAP_THRESHOLD) { 
-              snapZ = otherBack + movingDepth / 2; 
-              snapZType = 'adjacent'; 
-              snapZPos = otherBack;
-            }
-            else if (Math.abs(movingBack - otherFront) < SNAP_THRESHOLD) { 
-              snapZ = otherFront - movingDepth / 2; 
-              snapZType = 'adjacent'; 
-              snapZPos = otherFront;
-            }
-            else if (Math.abs(newZ - otherZ) < SNAP_THRESHOLD) { 
-              snapZ = otherZ; 
-              snapZType = 'center'; 
-              snapZPos = otherZ;
-            }
+          // Z snaps  
+          if (Math.abs(movingBack - otherFront) < SNAP_THRESHOLD && snapZ === null) {
+            snapZ = otherFront - movingDepth / 2;
+          }
+          if (Math.abs(movingFront - otherBack) < SNAP_THRESHOLD && snapZ === null) {
+            snapZ = otherBack + movingDepth / 2;
+          }
+          if (Math.abs(newZ - otherZ) < SNAP_THRESHOLD && snapZ === null) {
+            snapZ = otherZ;
           }
         });
         
-        if (snapX !== null) {
-          newX = snapX;
-          indicators.push({ x: snapXPos, z: newZ, axis: 'x', type: snapXType });
-        }
-        if (snapZ !== null) {
-          newZ = snapZ;
-          indicators.push({ x: newX, z: snapZPos, axis: 'z', type: snapZType });
-        }
+        if (snapX !== null) newX = snapX;
+        if (snapZ !== null) newZ = snapZ;
       }
       
-      // Update snap indicators
-      window.updateSnapIndicators && window.updateSnapIndicators(indicators);
-      
-      // Store pending position and update mesh directly
-      pendingPositions[id] = { x: newX, z: newZ };
+      pendingPositions[id] = { ...(pendingPositions[id] || {}), x: newX, z: newZ };
       mesh.position.x = newX;
       mesh.position.z = newZ;
+      
+      return { snapDeltaX: newX - rawX, snapDeltaZ: newZ - rawZ };
+    };
+    
+    window.moveElement = (id, delta) => {
+      // Move the main element and get snap adjustment
+      const snapDelta = moveSingleElement(id, delta, true) || { snapDeltaX: 0, snapDeltaZ: 0 };
+      
+      // Move other selected elements with the same delta (including snap adjustment)
+      const adjustedDelta = {
+        x: delta.x + snapDelta.snapDeltaX,
+        z: delta.z + snapDelta.snapDeltaZ
+      };
+      
+      selectedIds.forEach(otherId => {
+        if (otherId !== id) {
+          moveSingleElement(otherId, adjustedDelta, false);
+        }
+      });
     };
     
     window.rotateElement = (id, dx) => {
-      const mesh = meshesRef.current[id];
-      const el = elements.find(e => e.id === id);
-      if (!mesh || !el) return;
-      
-      let newRotation = (pendingPositions[id]?.rotation ?? el.rotation ?? 0) + dx * 0.5;
-      
-      if (snapEnabled) {
-        newRotation = Math.round(newRotation / 15) * 15;
+      if (selectedIds.length <= 1) {
+        // Single element rotation
+        const mesh = meshesRef.current[id];
+        const el = elements.find(e => e.id === id);
+        if (!mesh || !el) return;
+        
+        let newRotation = (pendingPositions[id]?.rotation ?? el.rotation ?? 0) + dx * 0.5;
+        
+        if (snapEnabled) {
+          newRotation = Math.round(newRotation / 45) * 45;
+        }
+        
+        pendingPositions[id] = { ...(pendingPositions[id] || {}), rotation: newRotation };
+        mesh.rotation.y = (newRotation * Math.PI) / 180;
+      } else {
+        // Multi-element rotation around geometric center
+        const angleDelta = dx * 0.5;
+        const snappedAngle = snapEnabled ? Math.round(angleDelta / 45) * 45 : angleDelta;
+        if (Math.abs(snappedAngle) < 0.1) return;
+        
+        // Calculate center of selected elements
+        const selectedEls = elements.filter(e => selectedIds.includes(e.id));
+        const centerX = selectedEls.reduce((sum, e) => sum + (pendingPositions[e.id]?.x ?? e.position?.x ?? 0), 0) / selectedEls.length;
+        const centerZ = selectedEls.reduce((sum, e) => sum + (pendingPositions[e.id]?.z ?? e.position?.z ?? 0), 0) / selectedEls.length;
+        
+        const angleRad = (snappedAngle * Math.PI) / 180;
+        
+        selectedIds.forEach(elId => {
+          const mesh = meshesRef.current[elId];
+          const el = elements.find(e => e.id === elId);
+          if (!mesh || !el) return;
+          
+          // Get current position
+          const px = (pendingPositions[elId]?.x ?? el.position?.x ?? 0) - centerX;
+          const pz = (pendingPositions[elId]?.z ?? el.position?.z ?? 0) - centerZ;
+          
+          // Rotate around center
+          const newX = px * Math.cos(angleRad) - pz * Math.sin(angleRad) + centerX;
+          const newZ = px * Math.sin(angleRad) + pz * Math.cos(angleRad) + centerZ;
+          
+          // Update rotation
+          const currentRotation = pendingPositions[elId]?.rotation ?? el.rotation ?? 0;
+          const newRotation = currentRotation + snappedAngle;
+          
+          pendingPositions[elId] = { 
+            ...(pendingPositions[elId] || {}), 
+            x: newX, 
+            z: newZ, 
+            rotation: newRotation 
+          };
+          
+          mesh.position.x = newX;
+          mesh.position.z = newZ;
+          mesh.rotation.y = (newRotation * Math.PI) / 180;
+        });
       }
-      
-      pendingPositions[id] = { ...(pendingPositions[id] || {}), rotation: newRotation };
-      mesh.rotation.y = (newRotation * Math.PI) / 180;
     };
     
     // Commit pending changes to React state (called on mouse up)
@@ -2603,12 +2797,13 @@ function Configurator({ project, onBack }) {
     
     return () => {
       delete window.selectElement;
+      delete window.getSelectedIds;
       delete window.getCurrentTool;
       delete window.moveElement;
       delete window.rotateElement;
       delete window.commitElementChanges;
     };
-  }, [tool, snapEnabled, elements]);
+  }, [tool, snapEnabled, elements, selectedIds]);
 
   // 3D Scene Setup
   useEffect(() => {
@@ -2795,8 +2990,8 @@ function Configurator({ project, onBack }) {
         const hitElementId = getIntersectedElement(e);
         
         if (hitElementId) {
-          // Clicked on an element
-          window.selectElement?.(hitElementId);
+          // Clicked on an element - pass ctrlKey and shiftKey for multi-select
+          window.selectElement?.(hitElementId, { ctrlKey: e.ctrlKey || e.metaKey, shiftKey: e.shiftKey });
           
           const currentTool = window.getCurrentTool?.() || 'select';
           
@@ -2923,7 +3118,7 @@ function Configurator({ project, onBack }) {
     const handleDblClick = (e) => {
       const hitElementId = getIntersectedElement(e);
       if (hitElementId) {
-        window.selectElement?.(hitElementId);
+        window.selectElement?.(hitElementId, { ctrlKey: e.ctrlKey || e.metaKey, shiftKey: e.shiftKey });
       }
     };
 
@@ -3094,7 +3289,7 @@ function Configurator({ project, onBack }) {
         delete meshesRef.current[el.id];
       }
 
-      const colorData = library.colors.find(c => c.id === el.material) || library.colors[0] || { color: '#666666' };
+      const colorData = library.colors.find(c => c.id === el.material) || { color: '#666666' };
       const color = new THREE.Color(colorData.color);
 
       const width = el.length / 100;
@@ -3359,7 +3554,7 @@ function Configurator({ project, onBack }) {
   }, [elements, selectedId, library, pieceLayout]);
 
   // Helper functions
-  const getColorById = (id) => library.colors.find(c => c.id === id) || library.colors[0];
+  const getColorById = (id) => library.colors.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
   const getManufacturerForColor = (colorId) => {
     const color = library.colors.find(c => c.id === colorId);
     return color?.manufacturer || library.manufacturers[0]?.id;
@@ -3389,7 +3584,7 @@ function Configurator({ project, onBack }) {
       length: type === 'backsplash' ? 200 : 200,
       depth: type === 'backsplash' ? 2 : 60,
       height: type === 'backsplash' ? 90 : 90,
-      placementHeight: type === 'backsplash' ? 0 : 90,
+      placementHeight: type === 'backsplash' ? 90 : 90,
       thickness: defaultThickness,
       material: firstColor?.id,
       waterfallLeft: false,
@@ -3408,7 +3603,131 @@ function Configurator({ project, onBack }) {
 
   const removeElement = (id) => {
     setElements(elements.filter(el => el.id !== id));
-    if (selectedId === id) setSelectedId(null);
+    if (selectedIds.includes(id)) {
+      setSelectedIds(selectedIds.filter(sid => sid !== id));
+    }
+  };
+
+  // Remove multiple selected elements
+  const removeSelectedElements = () => {
+    if (selectedIds.length === 0) return;
+    setElements(elements.filter(el => !selectedIds.includes(el.id)));
+    setSelectedIds([]);
+  };
+
+  // Group selected elements
+  const groupSelected = () => {
+    if (selectedIds.length < 2) return;
+    
+    const groupId = generateId();
+    setElements(elements.map(el => 
+      selectedIds.includes(el.id) ? { ...el, groupId } : el
+    ));
+  };
+
+  // Ungroup selected elements
+  const ungroupSelected = () => {
+    if (selectedIds.length === 0) return;
+    
+    // Get all group IDs from selected elements
+    const groupIds = new Set(
+      elements
+        .filter(el => selectedIds.includes(el.id) && el.groupId)
+        .map(el => el.groupId)
+    );
+    
+    if (groupIds.size === 0) return;
+    
+    // Remove groupId from all elements in those groups
+    setElements(elements.map(el => 
+      groupIds.has(el.groupId) ? { ...el, groupId: undefined } : el
+    ));
+  };
+
+  // Get geometric center of selected elements
+  const getSelectionCenter = () => {
+    const selected = elements.filter(el => selectedIds.includes(el.id));
+    if (selected.length === 0) return { x: 0, z: 0 };
+    
+    const sumX = selected.reduce((sum, el) => sum + (el.position?.x || 0), 0);
+    const sumZ = selected.reduce((sum, el) => sum + (el.position?.z || 0), 0);
+    
+    return {
+      x: sumX / selected.length,
+      z: sumZ / selected.length
+    };
+  };
+
+  // Move all selected elements by delta
+  const moveSelectedElements = (deltaX, deltaZ) => {
+    setElements(elements.map(el => {
+      if (!selectedIds.includes(el.id)) return el;
+      return {
+        ...el,
+        position: {
+          x: (el.position?.x || 0) + deltaX,
+          z: (el.position?.z || 0) + deltaZ
+        }
+      };
+    }));
+  };
+
+  // Rotate all selected elements around their geometric center
+  const rotateSelectedElements = (angleDelta) => {
+    const center = getSelectionCenter();
+    const angleRad = (angleDelta * Math.PI) / 180;
+    
+    setElements(elements.map(el => {
+      if (!selectedIds.includes(el.id)) return el;
+      
+      // Rotate position around center
+      const px = (el.position?.x || 0) - center.x;
+      const pz = (el.position?.z || 0) - center.z;
+      
+      const newX = px * Math.cos(angleRad) - pz * Math.sin(angleRad) + center.x;
+      const newZ = px * Math.sin(angleRad) + pz * Math.cos(angleRad) + center.z;
+      
+      return {
+        ...el,
+        position: { x: newX, z: newZ },
+        rotation: ((el.rotation || 0) + angleDelta) % 360
+      };
+    }));
+  };
+
+  // Select element with shift support for multi-select
+  // Select element: Ctrl+Click = add to selection, Shift+Click = remove from selection
+  const handleElementSelect = (id, { ctrlKey = false, shiftKey = false } = {}) => {
+    const el = elements.find(e => e.id === id);
+    
+    // If element is in a group, select all group members
+    if (el?.groupId) {
+      const groupMembers = elements.filter(e => e.groupId === el.groupId).map(e => e.id);
+      if (ctrlKey) {
+        // Add group to selection
+        setSelectedIds([...new Set([...selectedIds, ...groupMembers])]);
+      } else if (shiftKey) {
+        // Remove group from selection
+        setSelectedIds(selectedIds.filter(sid => !groupMembers.includes(sid)));
+      } else {
+        // Select only this group
+        setSelectedIds(groupMembers);
+      }
+      return;
+    }
+    
+    if (ctrlKey) {
+      // Add to selection (if not already selected)
+      if (!selectedIds.includes(id)) {
+        setSelectedIds([...selectedIds, id]);
+      }
+    } else if (shiftKey) {
+      // Remove from selection
+      setSelectedIds(selectedIds.filter(sid => sid !== id));
+    } else {
+      // Single select
+      setSelectedIds([id]);
+    }
   };
 
   const duplicateElement = (id) => {
@@ -3435,19 +3754,51 @@ function Configurator({ project, onBack }) {
     const handleKeyDown = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
       
+      // Delete selected elements
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedId) removeElement(selectedId);
+        if (selectedIds.length > 0) removeSelectedElements();
       }
-      if (e.key === 'g') setTool('move');
-      if (e.key === 'r') setTool('rotate');
-      if (e.key === 's') setSnapEnabled(!snapEnabled);
-      if (e.key === 'd' && selectedId) duplicateElement(selectedId);
-      if (e.key === 'Escape') setSelectedId(null);
+      
+      // Tool shortcuts
+      if (e.key === 'g' && !e.ctrlKey && !e.metaKey) setTool('move');
+      if (e.key === 'r' && !e.ctrlKey && !e.metaKey) setTool('rotate');
+      if (e.key === 's' && !e.ctrlKey && !e.metaKey) setSnapEnabled(!snapEnabled);
+      
+      // Duplicate
+      if (e.key === 'd' && !e.ctrlKey && !e.metaKey && selectedIds.length === 1) {
+        duplicateElement(selectedIds[0]);
+      }
+      
+      // Escape - deselect all
+      if (e.key === 'Escape') setSelectedIds([]);
+      
+      // Ctrl+G - Group selected
+      if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
+        e.preventDefault();
+        groupSelected();
+      }
+      
+      // Ctrl+X - Ungroup (explode)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'x' && !e.shiftKey) {
+        // Only ungroup if we have grouped elements selected
+        const hasGrouped = elements.some(el => selectedIds.includes(el.id) && el.groupId);
+        if (hasGrouped) {
+          e.preventDefault();
+          ungroupSelected();
+        }
+        // Otherwise let default cut behavior happen
+      }
+      
+      // Ctrl+A - Select all
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault();
+        setSelectedIds(elements.map(el => el.id));
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, snapEnabled]);
+  }, [selectedIds, snapEnabled, elements]);
 
   const toolBtnStyle = (active) => ({
     padding: '6px 12px',
@@ -3478,6 +3829,32 @@ function Configurator({ project, onBack }) {
             <button onClick={() => setTool('move')} style={toolBtnStyle(tool === 'move')}>✥ Move</button>
             <button onClick={() => setTool('rotate')} style={toolBtnStyle(tool === 'rotate')}>↻ Rotate</button>
           </div>
+          <div style={{ width: '1px', height: '20px', background: '#333' }} />
+          <button 
+            onClick={groupSelected} 
+            disabled={selectedIds.length < 2}
+            style={{ 
+              ...toolBtnStyle(false), 
+              opacity: selectedIds.length < 2 ? 0.4 : 1,
+              cursor: selectedIds.length < 2 ? 'not-allowed' : 'pointer'
+            }}
+            title="Group (Ctrl+G)"
+          >
+            ⊞ Group
+          </button>
+          <button 
+            onClick={ungroupSelected} 
+            disabled={!elements.some(el => selectedIds.includes(el.id) && el.groupId)}
+            style={{ 
+              ...toolBtnStyle(false), 
+              opacity: !elements.some(el => selectedIds.includes(el.id) && el.groupId) ? 0.4 : 1,
+              cursor: !elements.some(el => selectedIds.includes(el.id) && el.groupId) ? 'not-allowed' : 'pointer'
+            }}
+            title="Ungroup (Ctrl+X)"
+          >
+            ⊟ Ungroup
+          </button>
+          <div style={{ width: '1px', height: '20px', background: '#333' }} />
           <button onClick={() => setSnapEnabled(!snapEnabled)} style={{ ...toolBtnStyle(snapEnabled), background: snapEnabled ? 'rgba(74,153,74,0.2)' : '#1a1a1a', borderColor: snapEnabled ? '#4a9' : '#2a2a2a', color: snapEnabled ? '#4a9' : '#666' }}>
             ⊞ Snap {snapEnabled ? 'ON' : 'OFF'}
           </button>
@@ -3495,8 +3872,47 @@ function Configurator({ project, onBack }) {
           </button>
         </div>
 
-        <div style={{ fontSize: '10px', color: '#555' }}>G=Move R=Rotate D=Duplicate Del=Șterge Ctrl+Z=Undo</div>
+        <div style={{ fontSize: '10px', color: '#555' }}>G=Move R=Rotate D=Dup Del=Șterge | Ctrl+Click=Adaugă Shift+Click=Elimină | Ctrl+G=Group Ctrl+X=Ungroup</div>
       </div>
+
+      {/* Material Warnings Banner */}
+      {materialWarnings.length > 0 && (
+        <div style={{ 
+          background: 'rgba(201,98,98,0.15)', 
+          borderBottom: '1px solid rgba(201,98,98,0.3)',
+          padding: '8px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+        }}>
+          <span style={{ color: '#c96262' }}>⚠️</span>
+          <div style={{ flex: 1, fontSize: '12px', color: '#c96262' }}>
+            {materialWarnings.filter(w => w.type === 'missing').length > 0 && (
+              <span>
+                {materialWarnings.filter(w => w.type === 'missing').length} piesă(e) cu material inexistent.{' '}
+              </span>
+            )}
+            {materialWarnings.filter(w => w.type === 'archived').length > 0 && (
+              <span>
+                {materialWarnings.filter(w => w.type === 'archived').length} piesă(e) cu material arhivat (vor fi afișate dar nu pot fi selectate pentru piese noi).
+              </span>
+            )}
+          </div>
+          <button 
+            onClick={() => setMaterialWarnings([])}
+            style={{ 
+              background: 'transparent', 
+              border: 'none', 
+              color: '#c96262', 
+              cursor: 'pointer',
+              fontSize: '16px',
+              padding: '4px 8px',
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Main Content */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
@@ -3511,35 +3927,48 @@ function Configurator({ project, onBack }) {
           </div>
 
           <div style={{ flex: 1, overflow: 'auto', padding: '8px' }}>
-            <div style={{ fontSize: '10px', color: '#888', marginBottom: '8px' }}>ELEMENTE ({elements.length})</div>
+            <div style={{ fontSize: '10px', color: '#888', marginBottom: '8px' }}>
+              ELEMENTE ({elements.length})
+              {selectedIds.length > 1 && <span style={{ color: '#c9a962', marginLeft: '8px' }}>{selectedIds.length} selectate</span>}
+            </div>
             {elements.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: '#555', fontSize: '11px' }}>Adaugă un element</div>
-            ) : elements.map(el => (
-              <div
-                key={el.id}
-                onClick={() => setSelectedId(el.id)}
-                style={{
-                  padding: '10px',
-                  marginBottom: '6px',
-                  cursor: 'pointer',
-                  background: selectedId === el.id ? 'rgba(201,169,98,0.15)' : '#1a1a1a',
-                  border: `2px solid ${selectedId === el.id ? '#c9a962' : '#2a2a2a'}`,
-                  borderRadius: '4px',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 500, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{el.name}</div>
-                    <div style={{ fontSize: '10px', color: '#666' }}>{el.length}×{el.type === 'backsplash' ? el.height : el.depth}cm • {el.thickness}mm</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
-                      <div style={{ width: '12px', height: '12px', background: getColorById(el.material)?.color, borderRadius: '2px', border: '1px solid #333' }} />
-                      <span style={{ fontSize: '10px', color: '#888' }}>{getColorById(el.material)?.name}</span>
+            ) : elements.map(el => {
+              const isSelected = selectedIds.includes(el.id);
+              const hasGroup = el.groupId;
+              const groupColor = hasGroup ? `hsl(${parseInt(el.groupId, 36) % 360}, 60%, 50%)` : null;
+              
+              return (
+                <div
+                  key={el.id}
+                  onClick={(e) => handleElementSelect(el.id, { ctrlKey: e.ctrlKey || e.metaKey, shiftKey: e.shiftKey })}
+                  style={{
+                    padding: '10px',
+                    marginBottom: '6px',
+                    cursor: 'pointer',
+                    background: isSelected ? 'rgba(201,169,98,0.15)' : '#1a1a1a',
+                    border: `2px solid ${isSelected ? '#c9a962' : '#2a2a2a'}`,
+                    borderRadius: '4px',
+                    borderLeft: hasGroup ? `4px solid ${groupColor}` : undefined,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {el.name}
+                        {hasGroup && <span style={{ fontSize: '9px', color: groupColor, background: 'rgba(255,255,255,0.1)', padding: '1px 4px', borderRadius: '3px' }}>GRUP</span>}
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#666' }}>{el.length}×{el.type === 'backsplash' ? el.height : el.depth}cm • {el.thickness}mm</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+                        <div style={{ width: '12px', height: '12px', background: getColorById(el.material)?.color, borderRadius: '2px', border: '1px solid #333' }} />
+                        <span style={{ fontSize: '10px', color: '#888' }}>{getColorById(el.material)?.name}</span>
+                      </div>
                     </div>
+                    <button onClick={(e) => { e.stopPropagation(); removeElement(el.id); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}>×</button>
                   </div>
-                  <button onClick={(e) => { e.stopPropagation(); removeElement(el.id); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}>×</button>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -3562,7 +3991,43 @@ function Configurator({ project, onBack }) {
 
         {/* Right Panel - Properties */}
         <div style={{ width: '300px', borderLeft: '1px solid #2a2a2a', overflow: 'auto', flexShrink: 0 }}>
-          {selected ? (
+          {selectedIds.length > 1 ? (
+            // Multi-select panel
+            <div style={{ padding: '12px' }}>
+              <div style={{ fontSize: '11px', color: '#888', marginBottom: '16px' }}>SELECȚIE MULTIPLĂ</div>
+              
+              <div style={{ 
+                background: 'rgba(201,169,98,0.1)', 
+                border: '1px solid rgba(201,169,98,0.3)', 
+                borderRadius: '8px', 
+                padding: '16px',
+                textAlign: 'center',
+                marginBottom: '16px'
+              }}>
+                <div style={{ fontSize: '32px', color: '#c9a962', fontWeight: 700 }}>{selectedIds.length}</div>
+                <div style={{ fontSize: '12px', color: '#888' }}>elemente selectate</div>
+              </div>
+              
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '12px' }}>
+                Poți să:
+              </div>
+              <ul style={{ fontSize: '11px', color: '#888', margin: 0, paddingLeft: '20px', lineHeight: 1.8 }}>
+                <li>Muți toate elementele împreună (G + drag)</li>
+                <li>Rotești în jurul centrului geometric (R + drag)</li>
+                <li>Grupezi pentru a le păstra împreună (Ctrl+G)</li>
+                <li>Ștergi toate (Delete)</li>
+              </ul>
+              
+              {elements.some(el => selectedIds.includes(el.id) && el.groupId) && (
+                <div style={{ marginTop: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                  <div style={{ fontSize: '10px', color: '#c9a962', marginBottom: '8px' }}>GRUPURI ÎN SELECȚIE</div>
+                  <div style={{ fontSize: '11px', color: '#888' }}>
+                    Unele elemente sunt deja grupate. Folosește Ctrl+X pentru a le degrupa.
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : selected ? (
             <div style={{ padding: '12px' }}>
               {/* Header with type badge */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -3782,7 +4247,7 @@ function Configurator({ project, onBack }) {
                       return library.manufacturers
                         .filter(m => m.materialType === materialType)
                         .map(m => {
-                          const colorCount = library.colors.filter(c => c.manufacturer === m.id).length;
+                          const colorCount = library.colors.filter(c => c.manufacturer === m.id && !c.archived).length;
                           return <option key={m.id} value={m.id}>{m.name} ({colorCount} culori)</option>;
                         });
                     })()}
@@ -3794,7 +4259,7 @@ function Configurator({ project, onBack }) {
                   <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '6px' }}>
                     Culoare / Finisaj
                     <span style={{ color: '#888', marginLeft: '6px' }}>
-                      ({library.colors.filter(c => c.manufacturer === selectedManufacturer).length} disponibile)
+                      ({library.colors.filter(c => c.manufacturer === selectedManufacturer && !c.archived).length} disponibile)
                     </span>
                   </label>
                   <div style={{ 
@@ -3805,12 +4270,17 @@ function Configurator({ project, onBack }) {
                     overflowY: 'auto',
                     padding: '4px'
                   }}>
-                    {library.colors.filter(c => c.manufacturer === selectedManufacturer).map(c => {
+                    {/* Show active colors + current material if archived */}
+                    {library.colors
+                      .filter(c => c.manufacturer === selectedManufacturer && (!c.archived || c.id === selected.material))
+                      .map(c => {
                       const isSelected = selected.material === c.id;
+                      const isArchived = c.archived;
                       return (
                         <div
                           key={c.id}
                           onClick={() => {
+                            if (isArchived && !isSelected) return; // Can't select archived unless already selected
                             const thicknesses = getThicknessesForColor(c.id);
                             const preferredThickness = thicknesses.includes(selected.thickness) 
                               ? selected.thickness 
@@ -3824,14 +4294,31 @@ function Configurator({ project, onBack }) {
                             aspectRatio: '1',
                             background: c.texture ? `url(${c.texture}) center/cover` : c.color,
                             borderRadius: '6px',
-                            border: isSelected ? '3px solid #c9a962' : '2px solid #333',
-                            cursor: 'pointer',
+                            border: isSelected ? '3px solid #c9a962' : isArchived ? '2px solid #c96262' : '2px solid #333',
+                            cursor: isArchived && !isSelected ? 'not-allowed' : 'pointer',
                             position: 'relative',
                             boxShadow: isSelected ? '0 0 12px rgba(201,169,98,0.6)' : 'none',
                             transition: 'all 0.15s ease',
+                            opacity: isArchived && !isSelected ? 0.5 : 1,
                           }}
-                          title={c.name}
+                          title={isArchived ? `${c.name} (ARHIVAT)` : c.name}
                         >
+                          {/* Archived indicator */}
+                          {isArchived && (
+                            <div style={{
+                              position: 'absolute',
+                              top: '2px',
+                              left: '2px',
+                              background: 'rgba(201,98,98,0.9)',
+                              color: '#fff',
+                              fontSize: '8px',
+                              padding: '1px 4px',
+                              borderRadius: '3px',
+                              fontWeight: 600,
+                            }}>
+                              ARH
+                            </div>
+                          )}
                           {/* Info button for texture preview */}
                           {c.texture && (
                             <button 
