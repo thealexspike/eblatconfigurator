@@ -4057,7 +4057,9 @@ function Configurator({ project, onBack }) {
 function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, project, user, canvasRef }) {
   const [sendingQuote, setSendingQuote] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState(null); // 'success' | 'error' | null
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const footerRef = useRef(null);
+  const tilesAreaRef = useRef(null);
   
   const getColorById = (id) => library.colors.find(c => c.id === id) || { name: 'N/A', color: '#666' };
   
@@ -4120,7 +4122,7 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
     tilesByMaterial[materialType].push({ ...tile, originalIndex: i });
   });
   
-  // Load html2canvas dynamically and capture footer
+  // Load html2canvas dynamically and capture tiles area only
   const captureFooter = async () => {
     try {
       // Dynamically load html2canvas if not already loaded
@@ -4134,8 +4136,9 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
         });
       }
       
-      if (footerRef.current && window.html2canvas) {
-        const canvas = await window.html2canvas(footerRef.current, {
+      // Capture only the tiles area, not the whole footer
+      if (tilesAreaRef.current && window.html2canvas) {
+        const canvas = await window.html2canvas(tilesAreaRef.current, {
           backgroundColor: '#0d0d0d',
           scale: 2, // Higher quality
           logging: false,
@@ -4198,6 +4201,12 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
         const materialTypeObj = library.materialTypes.find(mt => mt.id === materialType);
         const manufacturer = library.manufacturers.find(m => m.id === color?.manufacturer);
         
+        // Calculate efficiency for this tile
+        const tilePiecesForCalc = pieces.filter(p => p.tileIndex === idx);
+        const tileArea = format ? format.length * format.width : 320 * 160;
+        const usedArea = tilePiecesForCalc.reduce((sum, p) => sum + (p.pieceW * p.pieceH), 0);
+        const efficiency = tileArea > 0 ? Math.round((usedArea / tileArea) * 100) : 0;
+        
         return {
           number: idx + 1,
           materialType: materialTypeObj?.name || materialType || '-',
@@ -4205,19 +4214,25 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
           colorName: color?.name || 'N/A',
           dimensions: format ? `${format.length}×${format.width}` : '-',
           thickness: tile.thickness || format?.thickness || '-',
+          efficiency,
         };
       });
       
       // Group tiles by material/manufacturer/color/dimensions/thickness for summary
+      // Also calculate average efficiency per group
       const tilesSummary = {};
       tilesData.forEach(tile => {
         const key = `${tile.materialType}|${tile.manufacturer}|${tile.colorName}|${tile.dimensions}|${tile.thickness}`;
         if (!tilesSummary[key]) {
-          tilesSummary[key] = { ...tile, count: 0 };
+          tilesSummary[key] = { ...tile, count: 0, totalEfficiency: 0 };
         }
         tilesSummary[key].count++;
+        tilesSummary[key].totalEfficiency += tile.efficiency;
       });
-      const tilesGrouped = Object.values(tilesSummary);
+      const tilesGrouped = Object.values(tilesSummary).map(t => ({
+        ...t,
+        avgEfficiency: Math.round(t.totalEfficiency / t.count)
+      }));
       
       const requestData = {
         projectName: project?.name || 'Proiect fără nume',
@@ -4337,7 +4352,19 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
 
       {/* Tile Layout */}
       <div style={{ flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }}>
-        <div style={{ display: 'flex', gap: '15px', flexWrap: 'nowrap', alignItems: 'flex-start', paddingTop: '5px' }}>
+        <div 
+          ref={tilesAreaRef}
+          style={{ 
+            display: 'flex', 
+            gap: '15px', 
+            flexWrap: 'nowrap', 
+            alignItems: 'flex-start', 
+            paddingTop: '5px',
+            paddingRight: '20px', // Padding to not cut tiles
+            paddingBottom: '5px',
+            background: '#0d0d0d', // Ensure background for screenshot
+          }}
+        >
           {Object.entries(tilesByMaterial).map(([materialType, materialTiles]) => (
             <div key={materialType} style={{ display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 }}>
               {/* Material type header */}
@@ -4367,6 +4394,11 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
                   
                   // Get pieces for this tile
                   const tilePieces = pieces.filter(p => p.tileIndex === tileIdx);
+                  
+                  // Calculate efficiency (used area / total area * 100)
+                  const tileArea = format.length * format.width;
+                  const usedArea = tilePieces.reduce((sum, p) => sum + (p.pieceW * p.pieceH), 0);
+                  const efficiency = tileArea > 0 ? Math.round((usedArea / tileArea) * 100) : 0;
                   
                   return (
                     <div key={tileIdx} style={{ display: 'flex', flexDirection: 'column', gap: '4px', flexShrink: 0 }}>
@@ -4540,9 +4572,22 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
                         })}
                       </div>
                       
-                      {/* Tile dimensions label */}
-                      <div style={{ fontSize: '12px', color: '#888', textAlign: 'center', fontWeight: 500 }}>
-                        {format.length}×{format.width} cm
+                      {/* Tile dimensions and efficiency on same line */}
+                      <div style={{ 
+                        fontSize: '11px', 
+                        textAlign: 'center', 
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}>
+                        <span style={{ color: '#888', fontWeight: 500 }}>{format.length}×{format.width} cm</span>
+                        <span style={{ 
+                          fontWeight: 600,
+                          color: efficiency >= 70 ? '#4a9' : efficiency >= 50 ? '#c9a962' : '#c96262'
+                        }}>
+                          {efficiency}%
+                        </span>
                       </div>
                     </div>
                   );
@@ -4556,7 +4601,7 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
       {/* CTA Button */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
         <button 
-          onClick={sendQuoteRequest}
+          onClick={() => setShowConfirmDialog(true)}
           disabled={sendingQuote}
           style={{ 
             padding: '14px 28px', 
@@ -4584,6 +4629,82 @@ function SlabCalculatorFooter({ elements, library, selectedId, setSelectedId, pr
           </div>
         )}
       </div>
+
+      {/* Confirmation Dialog */}
+      {showConfirmDialog && (
+        <div 
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.8)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+          }}
+          onClick={() => setShowConfirmDialog(false)}
+        >
+          <div 
+            style={{
+              background: '#1a1a1a',
+              borderRadius: '12px',
+              padding: '32px',
+              maxWidth: '450px',
+              border: '1px solid #333',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: '20px', color: '#fff', marginBottom: '16px', fontWeight: 600 }}>
+              📧 Confirmare Trimitere
+            </div>
+            <div style={{ color: '#999', marginBottom: '24px', lineHeight: 1.6 }}>
+              Ești sigur că vrei să trimiți cererea de ofertă?
+              <br /><br />
+              <strong style={{ color: '#c9a962' }}>{pieces.length} piese</strong> vor fi trimise către <strong style={{ color: '#c9a962' }}>contact@e-blat.com</strong>
+              {user?.email && (
+                <>
+                  <br />
+                  O copie va fi trimisă și la <strong style={{ color: '#c9a962' }}>{user.email}</strong>
+                </>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowConfirmDialog(false)}
+                style={{
+                  padding: '12px 24px',
+                  background: 'transparent',
+                  border: '1px solid #444',
+                  color: '#999',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                }}
+              >
+                Anulează
+              </button>
+              <button
+                onClick={() => {
+                  setShowConfirmDialog(false);
+                  sendQuoteRequest();
+                }}
+                style={{
+                  padding: '12px 24px',
+                  background: '#c9a962',
+                  border: 'none',
+                  color: '#000',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                ✓ Trimite Cererea
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
