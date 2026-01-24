@@ -3510,10 +3510,7 @@ function Configurator({ project, onBack }) {
       }
 
       // Selection highlight with outline (MeshBasicMaterial doesn't have emissive)
-      // Check if this element is selected OR if any element in same group is selected
-      const isDirectlySelected = selectedIds.includes(el.id);
-      const isGroupSelected = el.groupId && elements.some(e => e.groupId === el.groupId && selectedIds.includes(e.id));
-      const shouldHighlight = isDirectlySelected || isGroupSelected;
+      // Note: isDirectlySelected, isGroupSelected, shouldHighlight already declared above
       
       if (shouldHighlight) {
         // Add outline edges for selection
@@ -3721,7 +3718,7 @@ function Configurator({ project, onBack }) {
       name: type === 'backsplash' ? 'Contrablat' : 'Blat',
       length: type === 'backsplash' ? 200 : 200,
       depth: type === 'backsplash' ? 2 : 60,
-      height: type === 'backsplash' ? 90 : 90,
+      height: type === 'backsplash' ? 60 : 90,
       placementHeight: type === 'backsplash' ? 90 : 90,
       thickness: defaultThickness,
       material: firstColor?.id,
