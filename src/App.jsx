@@ -1446,10 +1446,10 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 // Initialize Supabase client
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Check if user is admin - any @e-blat.com email is admin
+// Check if user is admin - any @e-blat.com email is admin, or user_metadata.isAdmin, or profile.is_admin
 const isAdminEmail = (email) => {
   if (!email) return false;
-  return email.endsWith('@e-blat.com');
+  return email.endsWith('@e-blat.com') || email.endsWith('@atelierazimut.com');
 };
 
 // ============================================
@@ -1469,7 +1469,9 @@ function AuthProvider({ children }) {
       id: supabaseUser.id,
       email: supabaseUser.email,
       name: profile?.name || supabaseUser.user_metadata?.name || supabaseUser.email?.split('@')[0],
-      isAdmin: isAdminEmail(supabaseUser.email) || profile?.is_admin === true,
+      isAdmin: isAdminEmail(supabaseUser.email) || 
+               supabaseUser.user_metadata?.isAdmin === true || 
+               profile?.is_admin === true,
     };
   };
 
