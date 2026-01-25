@@ -383,8 +383,9 @@ function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [],
  * @param {boolean} isBacksplash - If true, project from Z axis, else from Y
  * @param {THREE.Color} fallbackColor - Color to use for sides/back
  * @param {boolean} debugMode - If true, show full texture with transparency
+ * @param {number} opacity - Opacity of the material (0-1), default 1.0
  */
-function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor, debugMode = false) {
+function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor, debugMode = false, opacity = 1.0) {
   if (!texture || !layoutInfo) {
     return new THREE.MeshBasicMaterial({ color: fallbackColor || 0x666666 });
   }
@@ -444,6 +445,7 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
     uniform bool uIsRotatedOnTile;
     uniform vec3 uSideColor;
     uniform bool uDebugMode;
+    uniform float uOpacity;
     
     varying vec3 vLocalPosition;
     varying vec3 vLocalNormal;
@@ -516,11 +518,12 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
             gl_FragColor = vec4(texColor.rgb, 0.9);
           }
         } else {
-          gl_FragColor = texture2D(uTexture, tileUV);
+          vec4 texColor = texture2D(uTexture, tileUV);
+          gl_FragColor = vec4(texColor.rgb, uOpacity);
         }
       } else {
         // Sides and back: solid color
-        gl_FragColor = vec4(uSideColor, 1.0);
+        gl_FragColor = vec4(uSideColor, uOpacity);
       }
     }
   `;
@@ -539,12 +542,14 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
       uIsBacksplash: { value: isBacksplash },
       uIsRotatedOnTile: { value: isRotatedOnTile },
       uSideColor: { value: sideColor },
-      uDebugMode: { value: debugMode }
+      uDebugMode: { value: debugMode },
+      uOpacity: { value: opacity }
     },
     vertexShader,
     fragmentShader,
     side: THREE.DoubleSide,
-    transparent: debugMode
+    transparent: opacity < 1.0 || debugMode,
+    depthWrite: opacity >= 1.0 && !debugMode
   });
   
   return material;
@@ -4691,22 +4696,73 @@ function Configurator({ project, onBack }) {
         const tileW = layoutInfo.tileW / 100; // tile width in meters
         const tileH = layoutInfo.tileH / 100; // tile height in meters
         
-        // Piece position on tile (in meters)
+        // Piece dimensions in meters (original, before rotation)
+        const meshW = layoutInfo.w / 100;  // piece mesh width (X axis)
+        const meshH = layoutInfo.h / 100;  // piece mesh depth (Z axis for slab, Y for backsplash)
+        
+        // Piece position on tile in packer coordinates (in meters)
         const pieceX = layoutInfo.x / 100;
         const pieceY = layoutInfo.y / 100;
-        const pieceW = layoutInfo.pieceW / 100;
-        const pieceH = layoutInfo.pieceH / 100;
+        const pieceW = layoutInfo.pieceW / 100;  // width on tile (may differ from meshW if rotated)
+        const pieceH = layoutInfo.pieceH / 100;  // height on tile (may differ from meshH if rotated)
         
-        // Calculate offset from piece center to tile center
-        const pieceCenterOnTileX = pieceX + pieceW / 2;
-        const pieceCenterOnTileY = pieceY + pieceH / 2;
+        const isRotatedOnTile = layoutInfo.grainLengthwise === false;
+        const isBacksplash = el.type === 'backsplash';
+        
+        // The piece mesh is centered at origin in local space
+        // The tile helper needs to be positioned so that:
+        // - The tile's texture (full 320x160) aligns with the piece's texture region
+        //
+        // In local space of the piece:
+        // - Piece center is at (0, 0, 0)
+        // - For slab: X is length, Z is depth
+        // - Tile helper has same orientation
+        //
+        // We need to find where tile center should be relative to piece center
+        // 
+        // On the tile (packer coords, origin top-left):
+        // - Piece occupies from (pieceX, pieceY) to (pieceX+pieceW, pieceY+pieceH)
+        // - Piece center on tile: (pieceX + pieceW/2, pieceY + pieceH/2)
+        // - Tile center: (tileW/2, tileH/2)
+        //
+        // Offset from piece center to tile center (in tile/packer coordinates):
+        // - deltaX = tileW/2 - (pieceX + pieceW/2)
+        // - deltaY = tileH/2 - (pieceY + pieceH/2)
+        //
+        // But we need to map this to 3D local space:
+        // - Packer X -> 3D X (same direction)
+        // - Packer Y -> 3D Z for slab, but Y increases DOWN in packer, Z increases "forward" in 3D
+        
         const tileCenterX = tileW / 2;
         const tileCenterY = tileH / 2;
+        const pieceCenterOnTileX = pieceX + pieceW / 2;
+        const pieceCenterOnTileY = pieceY + pieceH / 2;
         
-        const offsetX = tileCenterX - pieceCenterOnTileX;
-        const offsetZ = pieceCenterOnTileY - tileCenterY;
+        // Offset in packer coordinates
+        let offsetPackerX = tileCenterX - pieceCenterOnTileX;
+        let offsetPackerY = tileCenterY - pieceCenterOnTileY;
         
-        const isBacksplash = el.type === 'backsplash';
+        // Convert to 3D local space
+        // For slab: packer X -> 3D X, packer Y -> 3D -Z (because packer Y down = 3D Z forward, but we view from above)
+        // Actually, let's think about it differently:
+        // - In packer, Y=0 is top (back of counter), Y=max is bottom (front of counter)
+        // - In 3D top view, Z=negative is back, Z=positive is front
+        // - So packer Y maps to 3D Z directly (both increase toward front/viewer)
+        
+        let offset3dX, offset3dZ;
+        
+        if (isRotatedOnTile) {
+          // When piece is rotated on tile:
+          // - Piece's mesh X (length) is placed along tile's Y direction
+          // - Piece's mesh Z (depth) is placed along tile's X direction
+          // So we need to swap the offsets
+          offset3dX = -offsetPackerY;  // Tile Y offset -> 3D X (negated due to rotation direction)
+          offset3dZ = offsetPackerX;   // Tile X offset -> 3D Z
+        } else {
+          // Normal orientation
+          offset3dX = offsetPackerX;
+          offset3dZ = offsetPackerY;
+        }
         
         // Create tile geometry - use BoxGeometry like pieces for consistent normals
         let tileGeo;
@@ -4743,11 +4799,11 @@ function Configurator({ project, onBack }) {
         const tileMesh = new THREE.Mesh(tileGeo, tileMat);
         tileMesh.renderOrder = -1;
         
-        // Position tile helper relative to piece
+        // Position tile helper relative to piece in local space
         if (isBacksplash) {
-          tileMesh.position.set(offsetX, -offsetZ, -0.002);
+          tileMesh.position.set(offset3dX, -offset3dZ, -0.002);
         } else {
-          tileMesh.position.set(offsetX, -0.002, offsetZ);
+          tileMesh.position.set(offset3dX, -0.002, offset3dZ);
         }
         
         textureLoader.load(colorData.texture, (texture) => {
@@ -4755,11 +4811,8 @@ function Configurator({ project, onBack }) {
           texture.wrapT = THREE.ClampToEdgeWrapping;
           texture.anisotropy = rendererRef.current?.capabilities?.getMaxAnisotropy() || 4;
           
-          // Use same triplanar material as pieces, but for full tile
-          const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false);
-          tileTriplanarMat.transparent = true;
-          tileTriplanarMat.opacity = 0.5;
-          tileTriplanarMat.depthWrite = false;
+          // Use same triplanar material as pieces, but for full tile with 50% opacity
+          const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false, 0.5);
           
           tileMesh.material = tileTriplanarMat;
           tileMesh.material.needsUpdate = true;
