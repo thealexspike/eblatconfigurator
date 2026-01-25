@@ -4892,7 +4892,8 @@ function Configurator({ project, onBack }) {
       // Only for SELECTED elements to avoid visual clutter
       const isDebugActive = debugTexture && shouldHighlight;
       if (isDebugActive && layoutInfo && colorData.texture) {
-        createTileHelper(mesh, layoutInfo, colorData, isBacksplash, color, { rendererRef, sceneRef, cameraRef });
+        const isBacksplashForHelper = el.type === 'backsplash';
+        createTileHelper(mesh, layoutInfo, colorData, isBacksplashForHelper, color, { rendererRef, sceneRef, cameraRef });
       }
     });
     
