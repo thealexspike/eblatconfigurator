@@ -385,7 +385,7 @@ function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [],
  * @param {boolean} debugMode - If true, show full texture with transparency
  * @param {number} opacity - Opacity of the material (0-1), default 1.0
  */
-function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor, debugMode = false, opacity = 1.0) {
+function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor, debugMode = false, opacity = 1.0, isWaterfall = false) {
   if (!texture || !layoutInfo) {
     return new THREE.MeshBasicMaterial({ color: fallbackColor || 0x666666 });
   }
@@ -442,6 +442,7 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
     uniform vec2 uPieceScale;
     uniform vec2 uPieceSize;
     uniform bool uIsBacksplash;
+    uniform bool uIsWaterfall;
     uniform bool uIsRotatedOnTile;
     uniform vec3 uSideColor;
     uniform bool uDebugMode;
@@ -468,6 +469,30 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
           uv.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
           
           // If piece is rotated on tile (grainLengthwise=false):
+          if (uIsRotatedOnTile) {
+            vec2 swapped = vec2(uv.y, 1.0 - uv.x);
+            uv = swapped;
+          }
+        }
+      } else if (uIsWaterfall) {
+        // Waterfall: side face has local normal pointing in ±X direction
+        // Show texture on both +X and -X faces
+        isMainFace = abs(vLocalNormal.x) > 0.5;
+        
+        if (isMainFace) {
+          // Project from X axis - Z is horizontal (depth), Y is vertical (height)
+          // Waterfall geometry: BoxGeometry(thickness, height, depth)
+          // So Y is height (vertical), Z is depth (horizontal)
+          uv.x = (vLocalPosition.z / uPieceSize.y) + 0.5;  // Z maps to horizontal (depth = pieceH in packer)
+          uv.y = (vLocalPosition.y / uPieceSize.x) + 0.5;  // Y maps to vertical (height = pieceW in packer)
+          
+          // Flip for -X face to mirror correctly
+          if (vLocalNormal.x < 0.0) {
+            uv.x = 1.0 - uv.x;
+          }
+          
+          // Note: waterfall layout has grainLengthwise=false (rotated), 
+          // and pieceW=height, pieceH=depth, so we need to handle rotation
           if (uIsRotatedOnTile) {
             vec2 swapped = vec2(uv.y, 1.0 - uv.x);
             uv = swapped;
@@ -541,6 +566,7 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
       uPieceScale: { value: new THREE.Vector2(uvScaleX, uvScaleY) },
       uPieceSize: { value: new THREE.Vector2(pieceSizeX, pieceSizeY) },
       uIsBacksplash: { value: isBacksplash },
+      uIsWaterfall: { value: isWaterfall },
       uIsRotatedOnTile: { value: isRotatedOnTile },
       uSideColor: { value: sideColor },
       uDebugMode: { value: debugMode },
@@ -4761,78 +4787,19 @@ function Configurator({ project, onBack }) {
           }
           
           // Create box geometry for the waterfall
-          // Note: thicknessCm is already in meters (poorly named variable from parent scope)
           const waterfallGeo = new THREE.BoxGeometry(thicknessCm, waterfallHeightM, depthM);
           
-          const mat = new THREE.MeshBasicMaterial({
-            color: wfHasTexture ? 0xffffff : color,
-          });
+          let mat;
           
           if (wfHasTexture) {
-            // For waterfall, we need to manually set UV coordinates on the side faces
-            // because the piece is laid out horizontally in packer but rendered vertically in 3D
-            //
-            // Packer layout: pieceW=90 (waterfall height) horizontal, pieceH=60 (depth) vertical
-            // 3D geometry: BoxGeometry(thickness, waterfallHeight=90, depth=60)
-            //   - Side face (+X/-X): Y axis = 90cm vertical, Z axis = 60cm horizontal
-            //
-            // We need to sample the texture region correctly:
-            // - In packer, the region is at (x, y) with size (pieceW, pieceH) = (90, 60)
-            // - On 3D face: mesh Z (horizontal, 0-60cm) should map to pieceH direction
-            //               mesh Y (vertical, 0-90cm) should map to pieceW direction
-            
-            const { x, y, pieceW, pieceH, tileW, tileH } = wfLayout;
-            
-            // Modify UV coordinates for side faces
-            const uvAttr = waterfallGeo.attributes.uv;
-            const uvArray = uvAttr.array;
-            
-            // UV bounds for the texture region
-            // The piece occupies (x, y) to (x+pieceW, y+pieceH) on tile
-            // Texture UV: U horizontal (0-1), V vertical (0=bottom, 1=top)
-            const uMin = x / tileW;
-            const uMax = (x + pieceW) / tileW;
-            const vMin = 1 - (y + pieceH) / tileH;  // bottom in UV coords
-            const vMax = 1 - y / tileH;              // top in UV coords
-            
-            // BoxGeometry face order: +X, -X, +Y, -Y, +Z, -Z
-            // Each face has 4 vertices = 8 UV values (4 pairs)
-            //
-            // For +X face (looking from +X toward origin):
-            // Vertices are at corners: we see Y (vertical) and Z (horizontal)
-            // Three.js BoxGeometry +X face vertex order:
-            //   0: top-front    (Y+, Z+)
-            //   1: top-back     (Y+, Z-)  
-            //   2: bottom-front (Y-, Z+)
-            //   3: bottom-back  (Y-, Z-)
-            //
-            // We want:
-            // - Z- (back, mesh Z=0) → left of texture region → U = uMin
-            // - Z+ (front, mesh Z=depth) → right of texture region → U = uMax (but pieceH maps to Z)
-            // - Y- (bottom) → bottom of region → V = vMin
-            // - Y+ (top) → top of region → V = vMax (but pieceW maps to Y, and pieceW > pieceH)
-            //
-            // Since pieceW (90) is horizontal in packer but vertical on face (Y axis),
-            // and pieceH (60) is vertical in packer but horizontal on face (Z axis):
-            // - mesh Y (0 to 90) samples from uMin to uMax (horizontal extent of piece in packer)
-            // - mesh Z (0 to 60) samples from vMin to vMax (vertical extent of piece in packer)
-            
-            // +X face (indices 0-7)
-            uvArray[0] = uMax; uvArray[1] = vMax;   // Y+, Z+ (top-front) → right-top
-            uvArray[2] = uMax; uvArray[3] = vMin;   // Y+, Z- (top-back) → right-bottom
-            uvArray[4] = uMin; uvArray[5] = vMax;   // Y-, Z+ (bottom-front) → left-top
-            uvArray[6] = uMin; uvArray[7] = vMin;   // Y-, Z- (bottom-back) → left-bottom
-            
-            // -X face (indices 8-15) - mirrored view
-            uvArray[8] = uMax;  uvArray[9] = vMin;   // Y+, Z- → right-bottom
-            uvArray[10] = uMax; uvArray[11] = vMax;  // Y+, Z+ → right-top
-            uvArray[12] = uMin; uvArray[13] = vMin;  // Y-, Z- → left-bottom
-            uvArray[14] = uMin; uvArray[15] = vMax;  // Y-, Z+ → left-top
-            
-            uvAttr.needsUpdate = true;
-            
-            // Load texture without rotation (UVs handle the mapping)
+            // Use triplanar shader for consistent rendering with slab
+            // Waterfall layout needs adjustment - it's laid out horizontally in packer
+            // but rendered vertically in 3D with main face on ±X axis
             const textureLoader = new THREE.TextureLoader();
+            
+            // Create placeholder material first
+            mat = new THREE.MeshBasicMaterial({ color: color });
+            
             textureLoader.load(colorData.texture, (texture) => {
               texture.wrapS = THREE.ClampToEdgeWrapping;
               texture.wrapT = THREE.ClampToEdgeWrapping;
@@ -4841,9 +4808,13 @@ function Configurator({ project, onBack }) {
               texture.magFilter = THREE.LinearFilter;
               texture.generateMipmaps = true;
               
-              mat.map = texture;
-              mat.needsUpdate = true;
+              // Create triplanar material for waterfall (isWaterfall = true)
+              const triplanarMat = createTriplanarMaterial(texture, wfLayout, false, color, false, 1.0, true);
+              mesh.material.dispose();
+              mesh.material = triplanarMat;
             });
+          } else {
+            mat = new THREE.MeshBasicMaterial({ color: color });
           }
           
           const mesh = new THREE.Mesh(waterfallGeo, mat);
