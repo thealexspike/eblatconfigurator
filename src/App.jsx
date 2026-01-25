@@ -415,11 +415,13 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   
   const vertexShader = `
     varying vec3 vLocalPosition;
-    varying vec3 vNormal;
+    varying vec3 vLocalNormal;
     
     void main() {
       vLocalPosition = position;
-      vNormal = normalize(normalMatrix * normal);
+      // Use LOCAL normal directly, not transformed by normalMatrix
+      // This ensures face detection works regardless of camera angle
+      vLocalNormal = normal;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `;
@@ -435,18 +437,18 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
     uniform bool uDebugMode;
     
     varying vec3 vLocalPosition;
-    varying vec3 vNormal;
+    varying vec3 vLocalNormal;
     
     void main() {
       vec2 uv;
       
       // Check if this is the top/front face (where texture should appear)
+      // Using LOCAL normals so this works regardless of camera orientation
       bool isMainFace = false;
       
       if (uIsBacksplash) {
-        // Backsplash: ExtrudeGeometry creates front face with +Z normal (extrusion direction)
-        // After translate(0, 0, -thickness/2), the visible front face has normal +Z
-        isMainFace = vNormal.z > 0.5;
+        // Backsplash: front face has local normal pointing in +Z direction
+        isMainFace = vLocalNormal.z > 0.5;
         
         if (isMainFace) {
           // Project from Z axis - X is horizontal, Y is vertical
@@ -455,31 +457,22 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
           uv.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
           
           // If piece is rotated on tile (grainLengthwise=false):
-          // The piece's w (horizontal) becomes pieceH on tile (vertical)
-          // The piece's h (vertical) becomes pieceW on tile (horizontal)
-          // So we need to swap which UV component maps to which tile direction
           if (uIsRotatedOnTile) {
-            // Swap UV so that mesh X maps to tile Y and mesh Y maps to tile X
             vec2 swapped = vec2(uv.y, 1.0 - uv.x);
             uv = swapped;
           }
         }
       } else {
-        // Slab: top face has normal pointing in +Y direction
-        isMainFace = vNormal.y > 0.5;
+        // Slab: top face has local normal pointing in +Y direction
+        isMainFace = vLocalNormal.y > 0.5;
         
         if (isMainFace) {
           // Project from Y axis - X is length, Z is depth
-          // Map local position to 0-1 UV space
           uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
           uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
           
           // If piece is rotated on tile (grainLengthwise=false):
-          // The piece's w (length=X) becomes pieceH on tile (vertical direction)
-          // The piece's h (depth=Z) becomes pieceW on tile (horizontal direction)
-          // So we need to swap which UV component maps to which tile direction
           if (uIsRotatedOnTile) {
-            // Swap UV so that mesh X maps to tile Y and mesh Z maps to tile X
             vec2 swapped = vec2(uv.y, 1.0 - uv.x);
             uv = swapped;
           }
@@ -4485,8 +4478,9 @@ function Configurator({ project, onBack }) {
           texture.generateMipmaps = true;
           
           // Create triplanar material - uses local coords so no need to update position
-          // Pass debugTexture flag for debug visualization mode
-          const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color, debugTexture);
+          // Only enable debug mode for SELECTED elements
+          const isDebugActive = debugTexture && shouldHighlight;
+          const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color, isDebugActive);
           
           // Replace material on mesh
           mesh.material = triplanarMat;
@@ -4676,8 +4670,9 @@ function Configurator({ project, onBack }) {
       meshesRef.current[el.id] = mesh;
       
       // DEBUG MODE: Create a helper mesh showing the FULL TILE at real scale
-      // This tile mesh is positioned so the piece overlaps exactly where it should be on the tile
-      if (debugTexture && layoutInfo && colorData.texture) {
+      // Only for SELECTED elements to avoid visual clutter
+      const isDebugActive = debugTexture && shouldHighlight;
+      if (isDebugActive && layoutInfo && colorData.texture) {
         const tileW = layoutInfo.tileW / 100; // tile width in meters (e.g., 3.2m for 320cm)
         const tileH = layoutInfo.tileH / 100; // tile height in meters (e.g., 1.6m for 160cm)
         
