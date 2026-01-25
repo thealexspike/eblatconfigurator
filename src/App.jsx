@@ -492,48 +492,72 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
         vec2 tileUV = uPieceOffset + uv * uPieceScale;
         
         if (uDebugMode) {
-          // DEBUG MODE: Show the FULL 320x160 TILE at REAL SCALE
-          // The piece is a "window" into the tile - texture extends BEYOND piece edges
+          // DEBUG MODE v3: Show REAL SCALE tile texture
           // 
-          // tileUV = uPieceOffset + uv * uPieceScale
-          // This means when uv goes 0→1 (across piece), tileUV goes from offset to offset+scale
-          // 
-          // To show the FULL tile, we need to calculate where on the piece each part of the tile would be
-          // Inverse: to get full tile UV from piece UV:
-          //   fullTileUV = tileUV (already calculated correctly)
+          // The piece samples tileUV which goes from uPieceOffset to uPieceOffset+uPieceScale
+          // as uv goes from 0 to 1 across the piece.
           //
-          // The texture coordinates tileUV already sample the correct part of the tile
-          // We just need to show them and indicate where the tile boundaries are
+          // To visualize where the piece sits on the full tile:
+          // - tileUV is already the correct coordinate on the tile (0-1 = full tile)
+          // - We sample the texture at tileUV
+          // - We show tile edges where tileUV = 0 or 1
+          // - We show piece edges where uv = 0 or 1
+          //
+          // Example: piece at offset (0.1, 0.2) with scale (0.3, 0.4)
+          // - At piece corner uv=(0,0): tileUV = (0.1, 0.2)
+          // - At piece corner uv=(1,1): tileUV = (0.4, 0.6)
+          // - Tile edge tileUV.x=0 would be at uv.x = -0.1/0.3 = -0.33 (outside piece)
+          // - Tile edge tileUV.x=1 would be at uv.x = (1-0.1)/0.3 = 3.0 (outside piece)
           
+          // Sample texture at the correct tile position
           vec4 texColor = texture2D(uTexture, tileUV);
           
-          // Check if we're inside the tile bounds (tileUV 0-1)
-          bool insideTile = tileUV.x >= 0.0 && tileUV.x <= 1.0 && tileUV.y >= 0.0 && tileUV.y <= 1.0;
+          // Is this point inside the tile? (tileUV between 0 and 1)
+          bool insideTile = tileUV.x >= 0.0 && tileUV.x <= 1.0 && 
+                            tileUV.y >= 0.0 && tileUV.y <= 1.0;
           
-          // Draw border at piece edges (uv = 0 or 1)
-          float pieceBorderW = 0.02;
-          bool atPieceBorder = uv.x < pieceBorderW || uv.x > 1.0 - pieceBorderW || 
-                               uv.y < pieceBorderW || uv.y > 1.0 - pieceBorderW;
+          // Calculate where tile edges appear in piece UV space
+          // tileUV = uPieceOffset + uv * uPieceScale
+          // So: uv = (tileUV - uPieceOffset) / uPieceScale
+          // Tile edge at tileUV=0: uv = -uPieceOffset / uPieceScale
+          // Tile edge at tileUV=1: uv = (1 - uPieceOffset) / uPieceScale
           
-          // Draw border at tile edges (tileUV = 0 or 1)
-          float tileBorderW = 0.008;
-          bool atTileBorder = (tileUV.x >= 0.0 - tileBorderW && tileUV.x <= tileBorderW) || 
-                              (tileUV.x >= 1.0 - tileBorderW && tileUV.x <= 1.0 + tileBorderW) ||
-                              (tileUV.y >= 0.0 - tileBorderW && tileUV.y <= tileBorderW) || 
-                              (tileUV.y >= 1.0 - tileBorderW && tileUV.y <= 1.0 + tileBorderW);
+          vec2 tileStartInPieceUV = -uPieceOffset / uPieceScale;
+          vec2 tileEndInPieceUV = (vec2(1.0) - uPieceOffset) / uPieceScale;
           
+          // Border thickness in UV space
+          float borderW = 0.015;
+          
+          // Check if at piece border (gold) - where uv = 0 or 1
+          bool atPieceLeft = uv.x < borderW;
+          bool atPieceRight = uv.x > 1.0 - borderW;
+          bool atPieceBottom = uv.y < borderW;
+          bool atPieceTop = uv.y > 1.0 - borderW;
+          bool atPieceBorder = atPieceLeft || atPieceRight || atPieceBottom || atPieceTop;
+          
+          // Check if at tile border (cyan) - where tileUV = 0 or 1
+          // These might be inside or outside the piece depending on piece position
+          float tileBorderW = 0.01;
+          bool atTileLeft = abs(tileUV.x) < tileBorderW;
+          bool atTileRight = abs(tileUV.x - 1.0) < tileBorderW;
+          bool atTileBottom = abs(tileUV.y) < tileBorderW;
+          bool atTileTop = abs(tileUV.y - 1.0) < tileBorderW;
+          bool atTileBorder = atTileLeft || atTileRight || atTileBottom || atTileTop;
+          
+          // Color output
           if (atPieceBorder) {
-            // Golden border at PIECE boundary
+            // GOLD border = piece edges
             gl_FragColor = vec4(0.79, 0.66, 0.38, 1.0);
           } else if (atTileBorder && insideTile) {
-            // Cyan border at TILE boundary
+            // CYAN border = tile edges (only if visible within tile)
             gl_FragColor = vec4(0.0, 0.9, 0.9, 1.0);
           } else if (insideTile) {
-            // Inside tile: show texture with slight transparency
-            gl_FragColor = vec4(texColor.rgb, 0.85);
+            // Inside tile: show texture
+            gl_FragColor = texColor;
           } else {
-            // Outside tile bounds: dark red tint to show we're beyond the tile
-            gl_FragColor = vec4(0.3, 0.1, 0.1, 0.5);
+            // Outside tile: checkerboard pattern to show "no texture here"
+            float checker = mod(floor(uv.x * 8.0) + floor(uv.y * 8.0), 2.0);
+            gl_FragColor = vec4(vec3(0.15 + checker * 0.1), 0.8);
           }
         } else {
           gl_FragColor = texture2D(uTexture, tileUV);
