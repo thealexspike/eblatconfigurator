@@ -20,15 +20,356 @@ const hslToHex = (h, s, l) => {
 };
 
 // Get consistent color for a group (used in sidebar, footer, and 3D)
+// Avoids red hues (0-30 and 330-360) as red is reserved for error states
 const getGroupColor = (groupId) => {
   if (!groupId) return null;
-  const hue = parseInt(groupId, 36) % 360;
+  let hue = parseInt(groupId, 36) % 300; // 0-299
+  hue = hue + 30; // Shift to 30-329, avoiding red (0-30 and 330-360)
   return {
     hsl: `hsl(${hue}, 60%, 50%)`,
     hex: hslToHex(hue, 60, 50),
     hue
   };
 };
+
+// ============================================
+// CUTOUT (DECUPAJE) PRESETS & FUNCTIONS
+// ============================================
+
+const CUTOUT_PRESETS = {
+  // BLAT ONLY
+  'sink-single':     { type: 'rectangle', width: 50, height: 40, cornerRadius: 5, name: 'Chiuvetă simplă', icon: '🚰', forTypes: ['island'] },
+  'sink-double':     { type: 'rectangle', width: 80, height: 45, cornerRadius: 5, name: 'Chiuvetă dublă', icon: '🚰', forTypes: ['island'] },
+  'sink-round':      { type: 'circle', radius: 22, name: 'Chiuvetă rotundă', icon: '🚰', forTypes: ['island'] },
+  'hob-60':          { type: 'rectangle', width: 56, height: 49, cornerRadius: 3, name: 'Plită 60cm', icon: '🔥', forTypes: ['island'] },
+  'hob-70':          { type: 'rectangle', width: 65, height: 49, cornerRadius: 3, name: 'Plită 70cm', icon: '🔥', forTypes: ['island'] },
+  'hob-80':          { type: 'rectangle', width: 75, height: 49, cornerRadius: 3, name: 'Plită 80cm', icon: '🔥', forTypes: ['island'] },
+  'hob-90':          { type: 'rectangle', width: 85, height: 49, cornerRadius: 3, name: 'Plită 90cm', icon: '🔥', forTypes: ['island'] },
+  
+  // BLAT + CONTRABLAT
+  'outlet-single':   { type: 'rectangle', width: 8, height: 8, cornerRadius: 1, name: 'Priză simplă', icon: '🔌', forTypes: ['island', 'backsplash'] },
+  'outlet-double':   { type: 'rectangle', width: 15, height: 8, cornerRadius: 1, name: 'Priză dublă', icon: '🔌', forTypes: ['island', 'backsplash'] },
+  'outlet-triple':   { type: 'rectangle', width: 22, height: 8, cornerRadius: 1, name: 'Priză triplă', icon: '🔌', forTypes: ['island', 'backsplash'] },
+  'hole-3':          { type: 'circle', radius: 1.5, name: 'Gaură Ø3cm', icon: '⭕', forTypes: ['island', 'backsplash'] },
+  'hole-5':          { type: 'circle', radius: 2.5, name: 'Gaură Ø5cm', icon: '⭕', forTypes: ['island', 'backsplash'] },
+  'hole-8':          { type: 'circle', radius: 4, name: 'Gaură Ø8cm', icon: '⭕', forTypes: ['island', 'backsplash'] },
+  'custom-rect':     { type: 'rectangle', width: 20, height: 20, cornerRadius: 0, name: 'Dreptunghi custom', icon: '⬜', forTypes: ['island', 'backsplash'] },
+  'custom-circle':   { type: 'circle', radius: 10, name: 'Cerc custom', icon: '⭕', forTypes: ['island', 'backsplash'] },
+};
+
+// Transform user input (cota de la stânga/față) to internal center coordinates
+// Pentru DREPTUNGHI: cota e până la colțul stânga-față
+// Pentru CERC: cota e până la centru (ax)
+function cutoutUserInputToCenter(cotaStanga, cotaFata, cutout, pieceLength, pieceDepth) {
+  if (cutout.type === 'circle') {
+    // Cerc: cota e direct la centru
+    return {
+      x: cotaStanga - pieceLength / 2,
+      z: cotaFata - pieceDepth / 2
+    };
+  } else {
+    // Dreptunghi: cota e la colțul stânga-față, centrul = colț + jumătate dimensiuni
+    const centerFromOriginX = cotaStanga + (cutout.width || 0) / 2;
+    const centerFromOriginZ = cotaFata + (cutout.height || 0) / 2;
+    return {
+      x: centerFromOriginX - pieceLength / 2,
+      z: centerFromOriginZ - pieceDepth / 2
+    };
+  }
+}
+
+// Transform internal center to user-friendly input values
+function cutoutCenterToUserInput(cutout, pieceLength, pieceDepth) {
+  const centerFromOriginX = cutout.center.x + pieceLength / 2;
+  const centerFromOriginZ = cutout.center.z + pieceDepth / 2;
+  
+  if (cutout.type === 'circle') {
+    // Cerc: returnăm direct centrul
+    return {
+      cotaStanga: centerFromOriginX,
+      cotaFata: centerFromOriginZ
+    };
+  } else {
+    // Dreptunghi: returnăm colțul stânga-față
+    return {
+      cotaStanga: centerFromOriginX - (cutout.width || 0) / 2,
+      cotaFata: centerFromOriginZ - (cutout.height || 0) / 2
+    };
+  }
+}
+
+// Get bounding box of cutout in piece-local coordinates (cm)
+function getCutoutBoundingBox(cutout) {
+  if (cutout.type === 'circle') {
+    const r = cutout.radius || 0;
+    return {
+      left: cutout.center.x - r,
+      right: cutout.center.x + r,
+      front: cutout.center.z - r,
+      back: cutout.center.z + r,
+      width: r * 2,
+      height: r * 2
+    };
+  }
+  const w = cutout.width || 0;
+  const h = cutout.height || 0;
+  return {
+    left: cutout.center.x - w / 2,
+    right: cutout.center.x + w / 2,
+    front: cutout.center.z - h / 2,
+    back: cutout.center.z + h / 2,
+    width: w,
+    height: h
+  };
+}
+
+// Calculate distances from cutout to piece edges
+function getCutoutEdgeDistances(cutout, pieceLength, pieceDepth) {
+  const bbox = getCutoutBoundingBox(cutout);
+  return {
+    stanga: pieceLength / 2 + bbox.left,
+    dreapta: pieceLength / 2 - bbox.right,
+    fata: pieceDepth / 2 + bbox.front,
+    spate: pieceDepth / 2 - bbox.back
+  };
+}
+
+// Check if two cutouts overlap
+function checkCutoutsOverlap(a, b) {
+  // Circle vs Circle
+  if (a.type === 'circle' && b.type === 'circle') {
+    const dx = a.center.x - b.center.x;
+    const dz = a.center.z - b.center.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    const minDist = (a.radius || 0) + (b.radius || 0);
+    return {
+      overlaps: dist < minDist,
+      distance: dist - minDist
+    };
+  }
+  
+  // Circle vs Rectangle
+  if (a.type === 'circle' || b.type === 'circle') {
+    const circle = a.type === 'circle' ? a : b;
+    const rect = a.type === 'circle' ? b : a;
+    const bboxRect = getCutoutBoundingBox(rect);
+    
+    // Find closest point on rect to circle center
+    const closestX = Math.max(bboxRect.left, Math.min(circle.center.x, bboxRect.right));
+    const closestZ = Math.max(bboxRect.front, Math.min(circle.center.z, bboxRect.back));
+    
+    const dx = circle.center.x - closestX;
+    const dz = circle.center.z - closestZ;
+    const distToEdge = Math.sqrt(dx * dx + dz * dz);
+    
+    return {
+      overlaps: distToEdge < (circle.radius || 0),
+      distance: distToEdge - (circle.radius || 0)
+    };
+  }
+  
+  // Rectangle vs Rectangle (AABB)
+  const bboxA = getCutoutBoundingBox(a);
+  const bboxB = getCutoutBoundingBox(b);
+  
+  const overlapX = Math.max(0, Math.min(bboxA.right, bboxB.right) - Math.max(bboxA.left, bboxB.left));
+  const overlapZ = Math.max(0, Math.min(bboxA.back, bboxB.back) - Math.max(bboxA.front, bboxB.front));
+  
+  if (overlapX > 0 && overlapZ > 0) {
+    return { overlaps: true, distance: -Math.min(overlapX, overlapZ) };
+  }
+  
+  const gapX = Math.max(bboxA.left - bboxB.right, bboxB.left - bboxA.right, 0);
+  const gapZ = Math.max(bboxA.front - bboxB.back, bboxB.front - bboxA.back, 0);
+  const distance = Math.sqrt(gapX * gapX + gapZ * gapZ);
+  
+  return { overlaps: false, distance };
+}
+
+// Validate a cutout against piece dimensions and other cutouts
+function validateCutout(cutout, pieceLength, pieceDepth, allCutouts) {
+  const errors = [];
+  const warnings = [];
+  const MIN_EDGE = 5; // cm
+  const MIN_BETWEEN = 5; // cm
+  
+  const edges = getCutoutEdgeDistances(cutout, pieceLength, pieceDepth);
+  
+  // ERRORS: Cutout outside piece
+  if (edges.stanga < 0) errors.push('Decupajul iese din marginea stângă');
+  if (edges.dreapta < 0) errors.push('Decupajul iese din marginea dreaptă');
+  if (edges.fata < 0) errors.push('Decupajul iese din marginea din față');
+  if (edges.spate < 0) errors.push('Decupajul iese din marginea din spate');
+  
+  // WARNINGS: Too close to edge
+  if (edges.stanga >= 0 && edges.stanga < MIN_EDGE) 
+    warnings.push(`Distanță ${edges.stanga.toFixed(1)}cm de stânga (min: ${MIN_EDGE}cm)`);
+  if (edges.dreapta >= 0 && edges.dreapta < MIN_EDGE) 
+    warnings.push(`Distanță ${edges.dreapta.toFixed(1)}cm de dreapta (min: ${MIN_EDGE}cm)`);
+  if (edges.fata >= 0 && edges.fata < MIN_EDGE) 
+    warnings.push(`Distanță ${edges.fata.toFixed(1)}cm de față (min: ${MIN_EDGE}cm)`);
+  if (edges.spate >= 0 && edges.spate < MIN_EDGE) 
+    warnings.push(`Distanță ${edges.spate.toFixed(1)}cm de spate (min: ${MIN_EDGE}cm)`);
+  
+  // ERRORS: Overlap with other cutouts
+  // WARNINGS: Too close to other cutouts
+  allCutouts.forEach(other => {
+    if (other.id === cutout.id) return;
+    const overlap = checkCutoutsOverlap(cutout, other);
+    if (overlap.overlaps) {
+      errors.push(`Suprapunere cu "${other.name}"`);
+    } else if (overlap.distance < MIN_BETWEEN) {
+      warnings.push(`Distanță ${overlap.distance.toFixed(1)}cm de "${other.name}" (min: ${MIN_BETWEEN}cm)`);
+    }
+  });
+  
+  // ERRORS: Invalid dimensions
+  if (cutout.type === 'circle') {
+    if (!cutout.radius || cutout.radius < 0.5) errors.push('Raza minimă este 0.5cm');
+  } else {
+    if (!cutout.width || cutout.width < 1) errors.push('Lățimea minimă este 1cm');
+    if (!cutout.height || cutout.height < 1) errors.push('Lungimea minimă este 1cm');
+  }
+  
+  return { valid: errors.length === 0, errors, warnings, edges };
+}
+
+// Create a new cutout from preset, positioned at piece center
+function createCutoutFromPreset(presetId, pieceLength, pieceDepth) {
+  const preset = CUTOUT_PRESETS[presetId];
+  if (!preset) return null;
+  
+  // Default position: center of piece (for user: length/2, depth/2)
+  // Internal center: (0, 0)
+  const cutout = {
+    id: Math.random().toString(36).substr(2, 9),
+    type: preset.type,
+    center: { x: 0, z: 0 },
+    width: preset.width || null,
+    height: preset.height || null,
+    radius: preset.radius || null,
+    cornerRadius: preset.cornerRadius || 0,
+    name: preset.name,
+    preset: presetId
+  };
+  
+  return cutout;
+}
+
+/**
+ * Creates a THREE.js geometry for a slab/backsplash with cutouts
+ * Uses Shape + ExtrudeGeometry for pieces with cutouts, BoxGeometry for simple pieces
+ * 
+ * @param {number} widthCm - Width in cm (length of piece)
+ * @param {number} heightCm - Height in cm (depth for blat, height for backsplash)
+ * @param {number} thicknessMm - Thickness in mm
+ * @param {Array} cutouts - Array of cutout objects
+ * @param {boolean} isBacksplash - If true, geometry is vertical (Y-up), else horizontal (Y=thickness)
+ * @returns {THREE.BufferGeometry}
+ */
+function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [], isBacksplash = false) {
+  const width = widthCm / 100;   // meters
+  const height = heightCm / 100; // meters
+  const thickness = thicknessMm / 1000; // meters
+  
+  // If no cutouts, use simple BoxGeometry
+  if (!cutouts || cutouts.length === 0) {
+    if (isBacksplash) {
+      return new THREE.BoxGeometry(width, height, thickness);
+    } else {
+      return new THREE.BoxGeometry(width, thickness, height);
+    }
+  }
+  
+  // Create main shape (rectangle centered at origin)
+  const shape = new THREE.Shape();
+  const halfW = width / 2;
+  const halfH = height / 2;
+  
+  // Main rectangle path (counter-clockwise)
+  shape.moveTo(-halfW, -halfH);
+  shape.lineTo(halfW, -halfH);
+  shape.lineTo(halfW, halfH);
+  shape.lineTo(-halfW, halfH);
+  shape.lineTo(-halfW, -halfH);
+  
+  // Add cutouts as holes
+  cutouts.forEach(cutout => {
+    const hole = new THREE.Path();
+    
+    // Convert center from cm to meters
+    const cx = cutout.center.x / 100;
+    const cz = cutout.center.z / 100;
+    
+    if (cutout.type === 'circle') {
+      const r = (cutout.radius || 0) / 100;
+      // Circle hole (clockwise for hole)
+      const segments = 32;
+      for (let i = 0; i <= segments; i++) {
+        const angle = (i / segments) * Math.PI * 2;
+        const x = cx + r * Math.cos(angle);
+        const y = cz + r * Math.sin(angle);
+        if (i === 0) {
+          hole.moveTo(x, y);
+        } else {
+          hole.lineTo(x, y);
+        }
+      }
+    } else {
+      // Rectangle hole (with optional corner radius)
+      const w = (cutout.width || 0) / 100 / 2;
+      const h = (cutout.height || 0) / 100 / 2;
+      const r = Math.min((cutout.cornerRadius || 0) / 100, w, h);
+      
+      if (r > 0.001) {
+        // Rounded rectangle (clockwise for hole)
+        hole.moveTo(cx - w + r, cz - h);
+        hole.lineTo(cx + w - r, cz - h);
+        hole.quadraticCurveTo(cx + w, cz - h, cx + w, cz - h + r);
+        hole.lineTo(cx + w, cz + h - r);
+        hole.quadraticCurveTo(cx + w, cz + h, cx + w - r, cz + h);
+        hole.lineTo(cx - w + r, cz + h);
+        hole.quadraticCurveTo(cx - w, cz + h, cx - w, cz + h - r);
+        hole.lineTo(cx - w, cz - h + r);
+        hole.quadraticCurveTo(cx - w, cz - h, cx - w + r, cz - h);
+      } else {
+        // Simple rectangle (clockwise for hole)
+        hole.moveTo(cx - w, cz - h);
+        hole.lineTo(cx + w, cz - h);
+        hole.lineTo(cx + w, cz + h);
+        hole.lineTo(cx - w, cz + h);
+        hole.lineTo(cx - w, cz - h);
+      }
+    }
+    
+    shape.holes.push(hole);
+  });
+  
+  // Extrude the shape
+  const extrudeSettings = {
+    depth: thickness,
+    bevelEnabled: false
+  };
+  
+  const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+  
+  // Rotate and position geometry based on orientation
+  if (isBacksplash) {
+    // Backsplash: vertical panel
+    // ExtrudeGeometry creates on XY plane extruded on Z
+    // We need XY plane (width, height) with Z = thickness
+    // Actually this is correct, just center it
+    geometry.translate(0, 0, -thickness / 2);
+  } else {
+    // Slab: horizontal panel
+    // We need XZ plane (width, depth) with Y = thickness
+    // Rotate 90° on X axis to lay flat
+    geometry.rotateX(-Math.PI / 2);
+    geometry.translate(0, thickness / 2, 0);
+  }
+  
+  return geometry;
+}
 
 // ============================================
 // LAYOUT & TEXTURE MAPPING - SINGLE SOURCE OF TRUTH
@@ -3649,6 +3990,7 @@ function Configurator({ project, onBack }) {
       waterfallRight: el.waterfallRight,
       waterfallHeight: el.waterfallHeight,
       grainLengthwise: el.grainLengthwise,
+      cutouts: el.cutouts, // Include cutouts in hash for change detection
     });
   };
 
@@ -3789,11 +4131,13 @@ function Configurator({ project, onBack }) {
       
       if (el.type === 'backsplash') {
         const panelHeight = el.height / 100;
-        geometry = new THREE.BoxGeometry(width, panelHeight, thicknessCm);
+        // Use cutout-aware geometry
+        geometry = createGeometryWithCutouts(el.length, el.height, el.thickness || 12, el.cutouts, true);
         posY = placementHeight + panelHeight / 2;
       } else {
         const depth = el.depth / 100;
-        geometry = new THREE.BoxGeometry(width, thicknessCm, depth);
+        // Use cutout-aware geometry
+        geometry = createGeometryWithCutouts(el.length, el.depth, el.thickness || 12, el.cutouts, false);
         posY = placementHeight + thicknessCm / 2;
       }
 
@@ -4298,6 +4642,8 @@ function Configurator({ project, onBack }) {
         x: (el.position?.x || 0) + 0.3, 
         z: (el.position?.z || 0) + 0.3 
       },
+      // Regenerate cutout IDs to avoid duplicates
+      cutouts: el.cutouts?.map(c => ({ ...c, id: Math.random().toString(36).substr(2, 9) }))
     }));
     
     setElements([...elements, ...newElements]);
@@ -4505,11 +4851,23 @@ function Configurator({ project, onBack }) {
             </div>
             {elements.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: '#555', fontSize: '11px' }}>Adaugă un element</div>
-            ) : elements.map(el => {
+            ) : elements.map((el, index) => {
               const isSelected = selectedIds.includes(el.id);
               const hasGroup = el.groupId;
               const groupColorData = getGroupColor(el.groupId);
               const groupColor = groupColorData?.hsl;
+              
+              // Get piece numbers for this element from layout
+              const elementPieces = layoutData.pieces?.filter(p => p.elementId === el.id) || [];
+              const pieceNumbers = elementPieces.map(p => p.pieceNumber).filter(Boolean);
+              const pieceNumberStr = pieceNumbers.length > 0 ? pieceNumbers.sort((a,b) => {
+                const numA = parseInt(a.replace(/\D/g, ''));
+                const numB = parseInt(b.replace(/\D/g, ''));
+                return numA - numB;
+              }).join(', ') : `${index + 1}`;
+              
+              // Check if any piece exceeds tile dimensions
+              const hasExceedingPiece = elementPieces.some(p => p.exceeds);
               
               return (
                 <div
@@ -4522,16 +4880,24 @@ function Configurator({ project, onBack }) {
                     background: isSelected ? (groupColorData ? `hsla(${groupColorData.hue}, 60%, 50%, 0.15)` : 'rgba(201,169,98,0.15)') : '#1a1a1a',
                     border: `2px solid ${isSelected ? (groupColor || '#c9a962') : '#2a2a2a'}`,
                     borderRadius: '4px',
-                    borderLeft: hasGroup ? `4px solid ${groupColor}` : undefined,
+                    borderLeft: hasGroup ? `4px solid ${groupColor}` : (hasExceedingPiece ? '4px solid #c96262' : undefined),
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 500, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ 
+                          color: hasExceedingPiece ? '#c96262' : '#c9a962', 
+                          fontWeight: 700,
+                          minWidth: '20px'
+                        }}>
+                          {pieceNumberStr}
+                        </span>
                         {el.name}
                         {hasGroup && <span style={{ fontSize: '9px', color: groupColor, background: 'rgba(255,255,255,0.1)', padding: '1px 4px', borderRadius: '3px' }}>GRUP</span>}
+                        {hasExceedingPiece && <span style={{ fontSize: '9px', color: '#c96262', background: 'rgba(201,98,98,0.2)', padding: '1px 4px', borderRadius: '3px' }}>⚠️</span>}
                       </div>
-                      <div style={{ fontSize: '10px', color: '#666' }}>{el.length}×{el.type === 'backsplash' ? el.height : el.depth}cm • {el.thickness}mm</div>
+                      <div style={{ fontSize: '10px', color: hasExceedingPiece ? '#c96262' : '#666' }}>{el.length}×{el.type === 'backsplash' ? el.height : el.depth}cm • {el.thickness}mm</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
                         <div style={{ width: '12px', height: '12px', background: getColorById(el.material)?.color, borderRadius: '2px', border: '1px solid #333' }} />
                         <span style={{ fontSize: '10px', color: '#888' }}>{getColorById(el.material)?.name}</span>
@@ -4628,11 +4994,29 @@ function Configurator({ project, onBack }) {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                   <div>
                     <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Lungime (cm)</label>
-                    <NumericInput value={selected.length} onChange={v => updateElement(selected.id, { length: v })} min={1} style={{ ...inputStyle, padding: '8px' }} />
+                    <NumericInput value={selected.length} onChange={v => updateElement(selected.id, { length: v })} min={1} style={{ ...inputStyle, padding: '8px', borderColor: selected.length > 320 ? '#c96262' : undefined, background: selected.length > 320 ? 'rgba(201,98,98,0.1)' : undefined }} />
+                    {selected.length > 320 && (
+                      <div style={{ fontSize: '9px', color: '#c96262', marginTop: '4px' }}>
+                        ⚠️ Depășește 320cm
+                      </div>
+                    )}
                   </div>
                   <div>
-                    <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>{selected.type === 'backsplash' ? 'Înălțime' : 'Adâncime'} (cm)</label>
-                    <NumericInput value={selected.type === 'backsplash' ? selected.height : selected.depth} onChange={v => updateElement(selected.id, selected.type === 'backsplash' ? { height: v } : { depth: v })} min={1} style={{ ...inputStyle, padding: '8px' }} />
+                    {(() => {
+                      const widthValue = selected.type === 'backsplash' ? selected.height : selected.depth;
+                      const exceedsWidth = widthValue > 160;
+                      return (
+                        <>
+                          <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>{selected.type === 'backsplash' ? 'Înălțime' : 'Adâncime'} (cm)</label>
+                          <NumericInput value={widthValue} onChange={v => updateElement(selected.id, selected.type === 'backsplash' ? { height: v } : { depth: v })} min={1} style={{ ...inputStyle, padding: '8px', borderColor: exceedsWidth ? '#c96262' : undefined, background: exceedsWidth ? 'rgba(201,98,98,0.1)' : undefined }} />
+                          {exceedsWidth && (
+                            <div style={{ fontSize: '9px', color: '#c96262', marginTop: '4px' }}>
+                              ⚠️ Depășește 160cm
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
                 
@@ -4983,6 +5367,249 @@ function Configurator({ project, onBack }) {
                 />
               </div>
 
+              {/* Cutouts Section */}
+              <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                <div style={{ fontSize: '10px', color: '#c9a962', marginBottom: '10px', fontWeight: 600 }}>✂️ DECUPAJE</div>
+                
+                {/* Add Cutout Dropdown */}
+                <div style={{ marginBottom: '12px' }}>
+                  <select
+                    value=""
+                    onChange={e => {
+                      if (!e.target.value) return;
+                      const pieceDepth = selected.type === 'backsplash' ? selected.height : selected.depth;
+                      const newCutout = createCutoutFromPreset(e.target.value, selected.length, pieceDepth);
+                      if (newCutout) {
+                        const currentCutouts = selected.cutouts || [];
+                        if (currentCutouts.length >= 6) {
+                          alert('⚠️ Atenție: Piesa are deja 6 decupaje. Mai multe decupaje pot compromite integritatea structurală.');
+                        }
+                        updateElement(selected.id, { cutouts: [...currentCutouts, newCutout] });
+                      }
+                    }}
+                    style={{ ...inputStyle, padding: '8px', width: '100%' }}
+                  >
+                    <option value="">+ Adaugă decupaj...</option>
+                    {selected.type === 'island' && (
+                      <optgroup label="🚰 Chiuvete">
+                        <option value="sink-single">Chiuvetă simplă (50×40cm)</option>
+                        <option value="sink-double">Chiuvetă dublă (80×45cm)</option>
+                        <option value="sink-round">Chiuvetă rotundă (Ø44cm)</option>
+                      </optgroup>
+                    )}
+                    {selected.type === 'island' && (
+                      <optgroup label="🔥 Plite">
+                        <option value="hob-60">Plită 60cm (56×49cm)</option>
+                        <option value="hob-70">Plită 70cm (65×49cm)</option>
+                        <option value="hob-80">Plită 80cm (75×49cm)</option>
+                        <option value="hob-90">Plită 90cm (85×49cm)</option>
+                      </optgroup>
+                    )}
+                    <optgroup label="🔌 Prize">
+                      <option value="outlet-single">Priză simplă (8×8cm)</option>
+                      <option value="outlet-double">Priză dublă (15×8cm)</option>
+                      <option value="outlet-triple">Priză triplă (22×8cm)</option>
+                    </optgroup>
+                    <optgroup label="⭕ Găuri">
+                      <option value="hole-3">Gaură Ø3cm (cablu)</option>
+                      <option value="hole-5">Gaură Ø5cm (racord)</option>
+                      <option value="hole-8">Gaură Ø8cm (robinet)</option>
+                    </optgroup>
+                    <optgroup label="📐 Custom">
+                      <option value="custom-rect">Dreptunghi custom</option>
+                      <option value="custom-circle">Cerc custom</option>
+                    </optgroup>
+                  </select>
+                </div>
+
+                {/* Cutouts List */}
+                {(selected.cutouts || []).length === 0 ? (
+                  <div style={{ fontSize: '11px', color: '#555', textAlign: 'center', padding: '10px' }}>
+                    Niciun decupaj adăugat
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {(selected.cutouts || []).map((cutout, cutoutIndex) => {
+                      const pieceDepth = selected.type === 'backsplash' ? selected.height : selected.depth;
+                      const userInput = cutoutCenterToUserInput(cutout, selected.length, pieceDepth);
+                      const validation = validateCutout(cutout, selected.length, pieceDepth, selected.cutouts || []);
+                      const preset = CUTOUT_PRESETS[cutout.preset];
+                      const icon = preset?.icon || (cutout.type === 'circle' ? '⭕' : '⬜');
+                      
+                      return (
+                        <div key={cutout.id} style={{
+                          padding: '10px',
+                          background: '#1a1a1a',
+                          borderRadius: '4px',
+                          border: `1px solid ${validation.errors.length > 0 ? '#c96262' : (validation.warnings.length > 0 ? '#c9a962' : '#2a2a2a')}`
+                        }}>
+                          {/* Header */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 500 }}>
+                              {icon} {cutout.name}
+                            </div>
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Ștergi decupajul "${cutout.name}"?`)) {
+                                  const newCutouts = (selected.cutouts || []).filter(c => c.id !== cutout.id);
+                                  updateElement(selected.id, { cutouts: newCutouts });
+                                }
+                              }}
+                              style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}
+                            >×</button>
+                          </div>
+
+                          {/* Dimensions */}
+                          {cutout.type === 'circle' ? (
+                            <div style={{ marginBottom: '8px' }}>
+                              <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Diametru (cm)</label>
+                              <NumericInput
+                                value={(cutout.radius || 0) * 2}
+                                onChange={v => {
+                                  const newCutouts = [...(selected.cutouts || [])];
+                                  newCutouts[cutoutIndex] = { ...cutout, radius: v / 2 };
+                                  updateElement(selected.id, { cutouts: newCutouts });
+                                }}
+                                min={1}
+                                step={0.5}
+                                style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                              />
+                            </div>
+                          ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px' }}>
+                              <div>
+                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Lățime (cm)</label>
+                                <NumericInput
+                                  value={cutout.width || 0}
+                                  onChange={v => {
+                                    const newCutouts = [...(selected.cutouts || [])];
+                                    newCutouts[cutoutIndex] = { ...cutout, width: v };
+                                    // Recalculate center to keep corner position stable
+                                    const oldUserInput = cutoutCenterToUserInput(cutout, selected.length, pieceDepth);
+                                    const newCenter = cutoutUserInputToCenter(oldUserInput.cotaStanga, oldUserInput.cotaFata, { ...cutout, width: v }, selected.length, pieceDepth);
+                                    newCutouts[cutoutIndex].center = newCenter;
+                                    updateElement(selected.id, { cutouts: newCutouts });
+                                  }}
+                                  min={1}
+                                  step={1}
+                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Lungime (cm)</label>
+                                <NumericInput
+                                  value={cutout.height || 0}
+                                  onChange={v => {
+                                    const newCutouts = [...(selected.cutouts || [])];
+                                    newCutouts[cutoutIndex] = { ...cutout, height: v };
+                                    // Recalculate center to keep corner position stable
+                                    const oldUserInput = cutoutCenterToUserInput(cutout, selected.length, pieceDepth);
+                                    const newCenter = cutoutUserInputToCenter(oldUserInput.cotaStanga, oldUserInput.cotaFata, { ...cutout, height: v }, selected.length, pieceDepth);
+                                    newCutouts[cutoutIndex].center = newCenter;
+                                    updateElement(selected.id, { cutouts: newCutouts });
+                                  }}
+                                  min={1}
+                                  step={1}
+                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                />
+                              </div>
+                              {cutout.type === 'rectangle' && (
+                                <div style={{ gridColumn: '1 / -1' }}>
+                                  <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Colțuri rotunjite (cm)</label>
+                                  <NumericInput
+                                    value={cutout.cornerRadius || 0}
+                                    onChange={v => {
+                                      const newCutouts = [...(selected.cutouts || [])];
+                                      newCutouts[cutoutIndex] = { ...cutout, cornerRadius: v };
+                                      updateElement(selected.id, { cutouts: newCutouts });
+                                    }}
+                                    min={0}
+                                    max={Math.min((cutout.width || 0) / 2, (cutout.height || 0) / 2)}
+                                    step={0.5}
+                                    style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Position - User friendly (from left edge) */}
+                          <div style={{ marginBottom: '8px', paddingTop: '8px', borderTop: '1px solid #2a2a2a' }}>
+                            <label style={{ fontSize: '9px', color: '#888', display: 'block', marginBottom: '4px' }}>
+                              Poziție {cutout.type === 'circle' ? '(centru)' : '(colț stânga-față)'}
+                            </label>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                              <div>
+                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>De la stânga (cm)</label>
+                                <NumericInput
+                                  value={Math.round(userInput.cotaStanga * 10) / 10}
+                                  onChange={v => {
+                                    const newCenter = cutoutUserInputToCenter(v, userInput.cotaFata, cutout, selected.length, pieceDepth);
+                                    const newCutouts = [...(selected.cutouts || [])];
+                                    newCutouts[cutoutIndex] = { ...cutout, center: newCenter };
+                                    updateElement(selected.id, { cutouts: newCutouts });
+                                  }}
+                                  min={0}
+                                  max={selected.length}
+                                  step={1}
+                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>De la față (cm)</label>
+                                <NumericInput
+                                  value={Math.round(userInput.cotaFata * 10) / 10}
+                                  onChange={v => {
+                                    const newCenter = cutoutUserInputToCenter(userInput.cotaStanga, v, cutout, selected.length, pieceDepth);
+                                    const newCutouts = [...(selected.cutouts || [])];
+                                    newCutouts[cutoutIndex] = { ...cutout, center: newCenter };
+                                    updateElement(selected.id, { cutouts: newCutouts });
+                                  }}
+                                  min={0}
+                                  max={pieceDepth}
+                                  step={1}
+                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Edge distances display */}
+                          <div style={{ fontSize: '9px', color: '#666', padding: '6px', background: '#111', borderRadius: '3px', marginBottom: validation.errors.length > 0 || validation.warnings.length > 0 ? '8px' : 0 }}>
+                            📏 Distanțe margini: 
+                            <span style={{ color: validation.edges.stanga < 5 ? '#c96262' : '#888' }}> St:{validation.edges.stanga.toFixed(1)}</span> |
+                            <span style={{ color: validation.edges.dreapta < 5 ? '#c96262' : '#888' }}> Dr:{validation.edges.dreapta.toFixed(1)}</span> |
+                            <span style={{ color: validation.edges.fata < 5 ? '#c96262' : '#888' }}> Față:{validation.edges.fata.toFixed(1)}</span> |
+                            <span style={{ color: validation.edges.spate < 5 ? '#c96262' : '#888' }}> Spate:{validation.edges.spate.toFixed(1)}</span>
+                          </div>
+
+                          {/* Errors */}
+                          {validation.errors.length > 0 && (
+                            <div style={{ fontSize: '10px', color: '#c96262', padding: '6px', background: 'rgba(201,98,98,0.1)', borderRadius: '3px', marginBottom: validation.warnings.length > 0 ? '4px' : 0 }}>
+                              ⛔ {validation.errors.join('; ')}
+                            </div>
+                          )}
+
+                          {/* Warnings */}
+                          {validation.warnings.length > 0 && (
+                            <div style={{ fontSize: '10px', color: '#c9a962', padding: '6px', background: 'rgba(201,169,98,0.1)', borderRadius: '3px' }}>
+                              ⚠️ {validation.warnings.join('; ')}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Cutouts limit warning */}
+                {(selected.cutouts || []).length >= 6 && (
+                  <div style={{ fontSize: '10px', color: '#c96262', padding: '8px', background: 'rgba(201,98,98,0.1)', borderRadius: '4px', marginTop: '8px', textAlign: 'center' }}>
+                    ⚠️ Limită de 6 decupaje atinsă - risc de pierdere integritate structurală
+                  </div>
+                )}
+              </div>
+
               {/* Actions */}
               <div style={{ display: 'flex', gap: '8px', paddingTop: '12px', borderTop: '1px solid #2a2a2a' }}>
                 <button onClick={() => duplicateElement(selected.id)} style={{ ...secondaryBtnStyle, flex: 1, padding: '10px', fontSize: '11px' }}>📋 Duplică</button>
@@ -5149,6 +5776,22 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
   
   const totalArea = pieces.reduce((s, p) => s + p.w * p.h / 10000, 0);
   const exceedingPieces = pieces.filter(p => p.exceeds);
+  
+  // Check for cutout errors across all elements
+  const cutoutErrors = [];
+  elements.forEach(el => {
+    if (el.cutouts && el.cutouts.length > 0) {
+      const pieceDepth = el.type === 'backsplash' ? el.height : el.depth;
+      el.cutouts.forEach(cutout => {
+        const validation = validateCutout(cutout, el.length, pieceDepth, el.cutouts);
+        if (!validation.valid) {
+          cutoutErrors.push({ element: el.name, cutout: cutout.name, errors: validation.errors });
+        }
+      });
+    }
+  });
+  const hasCutoutErrors = cutoutErrors.length > 0;
+  
   const count = tiles.length;
   
   // Calculate length totals for blaturi (slabs) and contrablaturi (backsplashes)
@@ -5243,9 +5886,22 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
         const color = getColorById(p.colorId);
         const materialType = getMaterialType(p.colorId);
         const materialTypeObj = library.materialTypes.find(mt => mt.id === materialType);
+        const element = elements.find(e => e.id === p.elementId);
+        
+        // Format cutouts for email
+        const cutoutsData = element?.cutouts?.map(c => {
+          const pieceDepth = element.type === 'backsplash' ? element.height : element.depth;
+          const userInput = cutoutCenterToUserInput(c, element.length, pieceDepth);
+          if (c.type === 'circle') {
+            return `${c.name} Ø${(c.radius || 0) * 2}cm la ${Math.round(userInput.cotaStanga)}cm de stânga, ${Math.round(userInput.cotaFata)}cm de față`;
+          } else {
+            return `${c.name} ${c.width}×${c.height}cm la ${Math.round(userInput.cotaStanga)}cm de stânga, ${Math.round(userInput.cotaFata)}cm de față`;
+          }
+        }) || [];
         
         return {
           number: p.pieceNumber,
+          name: p.name,
           type: p.pieceType === 'slab' ? 'island' : 'backsplash',
           // Use pieceW and pieceH which are the actual dimensions on tile after rotation
           width: p.pieceW,
@@ -5253,6 +5909,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
           materialType: materialTypeObj?.name || materialType || '-',
           colorName: color?.name || 'N/A',
           thickness: p.thickness || '-',
+          cutouts: cutoutsData,
         };
       });
       
@@ -5603,6 +6260,91 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                 fontWeight: (shouldHighlight || exceeds) ? 600 : 500,
                                 textShadow: '0 0 2px rgba(0,0,0,0.8)',
                               }}>
+                                {/* Render cutouts as dark overlays */}
+                                {pieceElement?.cutouts?.map((cutout, cutIdx) => {
+                                  // Get piece dimensions in cm
+                                  const pieceLengthCm = pieceElement.length;
+                                  const pieceDepthCm = pieceElement.type === 'backsplash' ? pieceElement.height : pieceElement.depth;
+                                  
+                                  // Convert cutout center from internal coords to user coords (from corner)
+                                  const userInput = cutoutCenterToUserInput(cutout, pieceLengthCm, pieceDepthCm);
+                                  
+                                  // Check if piece is rotated on tile (pieceW/H might be swapped)
+                                  const isRotatedOnTile = p.rotated;
+                                  
+                                  let cutLeftPx, cutTopPx, cutWPx, cutHPx;
+                                  
+                                  if (cutout.type === 'circle') {
+                                    const diameterCm = (cutout.radius || 0) * 2;
+                                    if (isRotatedOnTile) {
+                                      // Rotated 90° CW: x->y, y->width-x
+                                      cutLeftPx = userInput.cotaFata * uniformScale - (cutout.radius || 0) * uniformScale;
+                                      cutTopPx = (pieceLengthCm - userInput.cotaStanga) * uniformScale - (cutout.radius || 0) * uniformScale;
+                                      cutWPx = diameterCm * uniformScale;
+                                      cutHPx = diameterCm * uniformScale;
+                                    } else {
+                                      cutLeftPx = (userInput.cotaStanga - (cutout.radius || 0)) * uniformScale;
+                                      cutTopPx = (userInput.cotaFata - (cutout.radius || 0)) * uniformScale;
+                                      cutWPx = diameterCm * uniformScale;
+                                      cutHPx = diameterCm * uniformScale;
+                                    }
+                                    
+                                    return (
+                                      <div
+                                        key={cutIdx}
+                                        style={{
+                                          position: 'absolute',
+                                          left: cutLeftPx,
+                                          top: cutTopPx,
+                                          width: cutWPx,
+                                          height: cutHPx,
+                                          borderRadius: '50%',
+                                          background: 'rgba(30, 30, 30, 0.85)',
+                                          border: '1px solid #444',
+                                          pointerEvents: 'none',
+                                        }}
+                                        title={cutout.name}
+                                      />
+                                    );
+                                  } else {
+                                    // Rectangle
+                                    const cutW = cutout.width || 0;
+                                    const cutH = cutout.height || 0;
+                                    const cornerR = (cutout.cornerRadius || 0) * uniformScale;
+                                    
+                                    if (isRotatedOnTile) {
+                                      // Rotated 90° CW
+                                      cutLeftPx = userInput.cotaFata * uniformScale;
+                                      cutTopPx = (pieceLengthCm - userInput.cotaStanga - cutW) * uniformScale;
+                                      cutWPx = cutH * uniformScale;
+                                      cutHPx = cutW * uniformScale;
+                                    } else {
+                                      cutLeftPx = userInput.cotaStanga * uniformScale;
+                                      cutTopPx = userInput.cotaFata * uniformScale;
+                                      cutWPx = cutW * uniformScale;
+                                      cutHPx = cutH * uniformScale;
+                                    }
+                                    
+                                    return (
+                                      <div
+                                        key={cutIdx}
+                                        style={{
+                                          position: 'absolute',
+                                          left: cutLeftPx,
+                                          top: cutTopPx,
+                                          width: cutWPx,
+                                          height: cutHPx,
+                                          borderRadius: cornerR,
+                                          background: 'rgba(30, 30, 30, 0.85)',
+                                          border: '1px solid #444',
+                                          pointerEvents: 'none',
+                                        }}
+                                        title={cutout.name}
+                                      />
+                                    );
+                                  }
+                                })}
+                                
                                 {/* Joint edge indicators */}
                                 {shouldHighlight && (isLeftWaterfall || isRightWaterfall) && (
                                   <div style={{
@@ -5676,22 +6418,28 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
         <button 
           onClick={() => setShowConfirmDialog(true)}
-          disabled={sendingQuote}
+          disabled={sendingQuote || hasCutoutErrors}
           style={{ 
             padding: '14px 28px', 
-            background: sendingQuote ? '#1a1a1a' : 'transparent', 
-            border: '1px solid #c9a962',
-            color: '#c9a962', 
+            background: (sendingQuote || hasCutoutErrors) ? '#1a1a1a' : 'transparent', 
+            border: `1px solid ${hasCutoutErrors ? '#c96262' : '#c9a962'}`,
+            color: hasCutoutErrors ? '#c96262' : '#c9a962', 
             fontWeight: 600, 
-            cursor: sendingQuote ? 'wait' : 'pointer',
+            cursor: (sendingQuote || hasCutoutErrors) ? 'not-allowed' : 'pointer',
             flexShrink: 0,
             fontSize: '13px',
-            opacity: sendingQuote ? 0.7 : 1,
+            opacity: (sendingQuote || hasCutoutErrors) ? 0.7 : 1,
             transition: 'all 0.2s ease',
           }}
+          title={hasCutoutErrors ? 'Corectează erorile la decupaje înainte de a trimite oferta' : ''}
         >
-          {sendingQuote ? '⏳ Se trimite...' : 'Solicită Ofertă'}
+          {sendingQuote ? '⏳ Se trimite...' : (hasCutoutErrors ? '⛔ Erori decupaje' : 'Solicită Ofertă')}
         </button>
+        {hasCutoutErrors && (
+          <div style={{ fontSize: '10px', color: '#c96262', textAlign: 'center', maxWidth: '150px' }}>
+            Corectează {cutoutErrors.length} eroare{cutoutErrors.length > 1 ? '' : ''} la decupaje
+          </div>
+        )}
         {quoteStatus === 'success' && (
           <div style={{ fontSize: '11px', color: '#4a9', textAlign: 'center' }}>
             ✓ Cererea a fost trimisă!
