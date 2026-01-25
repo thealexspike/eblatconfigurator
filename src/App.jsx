@@ -556,6 +556,127 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   return material;
 }
 
+/**
+ * Creates a debug tile helper mesh that shows the full tile texture
+ * Used to visualize where a piece is positioned on its source tile
+ * 
+ * @param {THREE.Mesh} parentMesh - The piece mesh to attach helper to
+ * @param {Object} layoutInfo - Layout info with piece position on tile
+ * @param {Object} colorData - Color data with texture URL
+ * @param {boolean} isBacksplash - If true, piece is vertical backsplash
+ * @param {THREE.Color} color - Fallback color
+ * @param {Object} refs - Object containing rendererRef, sceneRef, cameraRef for re-render
+ * @returns {THREE.Mesh} The tile helper mesh (already added to parentMesh)
+ */
+function createTileHelper(parentMesh, layoutInfo, colorData, isBacksplash, color, refs) {
+  if (!layoutInfo || !colorData.texture) return null;
+  
+  const tileW = layoutInfo.tileW / 100; // tile width in meters
+  const tileH = layoutInfo.tileH / 100; // tile height in meters
+  
+  // Piece position on tile in packer coordinates (in meters)
+  const pieceX = layoutInfo.x / 100;
+  const pieceY = layoutInfo.y / 100;
+  const pieceW = layoutInfo.pieceW / 100;
+  const pieceH = layoutInfo.pieceH / 100;
+  
+  const isRotatedOnTile = layoutInfo.grainLengthwise === false;
+  
+  // Calculate offset from piece center to tile center
+  const tileCenterX = tileW / 2;
+  const tileCenterY = tileH / 2;
+  const pieceCenterOnTileX = pieceX + pieceW / 2;
+  const pieceCenterOnTileY = pieceY + pieceH / 2;
+  
+  const offsetTileX = tileCenterX - pieceCenterOnTileX;
+  const offsetTileY = tileCenterY - pieceCenterOnTileY;
+  
+  // Create tile geometry - use BoxGeometry for consistent normals with shader
+  let tileGeo;
+  if (isBacksplash) {
+    tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.01);
+  } else {
+    if (isRotatedOnTile) {
+      tileGeo = new THREE.BoxGeometry(tileH, 0.01, tileW);
+    } else {
+      tileGeo = new THREE.BoxGeometry(tileW, 0.01, tileH);
+    }
+  }
+  
+  // Create layout info for the FULL TILE (offset 0, scale 1)
+  const fullTileLayoutInfo = {
+    x: 0,
+    y: 0,
+    w: isRotatedOnTile ? layoutInfo.tileH : layoutInfo.tileW,
+    h: isRotatedOnTile ? layoutInfo.tileW : layoutInfo.tileH,
+    pieceW: layoutInfo.tileW,
+    pieceH: layoutInfo.tileH,
+    tileW: layoutInfo.tileW,
+    tileH: layoutInfo.tileH,
+    grainLengthwise: !isRotatedOnTile
+  };
+  
+  // Create placeholder material
+  const tileMat = new THREE.MeshBasicMaterial({ 
+    color: color,
+    transparent: true,
+    opacity: 0.5
+  });
+  
+  const tileMesh = new THREE.Mesh(tileGeo, tileMat);
+  tileMesh.renderOrder = -1;
+  
+  // IMPORTANT: Disable raycast so tile helper doesn't block piece selection
+  tileMesh.raycast = () => {};
+  
+  // Position in LOCAL space of parent mesh
+  if (isBacksplash) {
+    tileMesh.position.set(offsetTileX, -offsetTileY, -0.005);
+  } else {
+    tileMesh.position.set(offsetTileX, -0.005, offsetTileY);
+  }
+  
+  // No local rotation - inherits parent rotation
+  tileMesh.rotation.set(0, 0, 0);
+  
+  // Mark as debug helper for cleanup
+  tileMesh.userData.isDebugTileHelper = true;
+  
+  // Add cyan wireframe border
+  const tileEdges = new THREE.EdgesGeometry(tileGeo);
+  const tileLineMat = new THREE.LineBasicMaterial({ 
+    color: 0x00ffff,
+    linewidth: 2,
+    depthTest: false,
+  });
+  const tileOutline = new THREE.LineSegments(tileEdges, tileLineMat);
+  tileOutline.renderOrder = 999;
+  tileMesh.add(tileOutline);
+  
+  // Add as child of parent mesh
+  parentMesh.add(tileMesh);
+  
+  // Load texture and apply triplanar shader
+  const textureLoader = new THREE.TextureLoader();
+  textureLoader.load(colorData.texture, (texture) => {
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.anisotropy = refs.rendererRef?.current?.capabilities?.getMaxAnisotropy() || 4;
+    
+    const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false, 0.5);
+    
+    tileMesh.material.dispose();
+    tileMesh.material = tileTriplanarMat;
+    
+    // Force re-render
+    if (refs.rendererRef?.current && refs.sceneRef?.current && refs.cameraRef?.current) {
+      refs.rendererRef.current.render(refs.sceneRef.current, refs.cameraRef.current);
+    }
+  });
+  
+  return tileMesh;
+}
+
 // ============================================
 // LAYOUT & TEXTURE MAPPING - SINGLE SOURCE OF TRUTH
 // ============================================
@@ -4491,87 +4612,9 @@ function Configurator({ project, onBack }) {
           const colorData = library.colors.find(c => c.id === el.material) || { color: '#666666' };
           
           if (isDebugActive && layoutInfo && colorData.texture) {
-            const tileW = layoutInfo.tileW / 100;
-            const tileH = layoutInfo.tileH / 100;
-            const pieceX = layoutInfo.x / 100;
-            const pieceY = layoutInfo.y / 100;
-            const pieceW = layoutInfo.pieceW / 100;
-            const pieceH = layoutInfo.pieceH / 100;
-            const isRotatedOnTile = layoutInfo.grainLengthwise === false;
             const isBacksplash = el.type === 'backsplash';
-            
-            const tileCenterX = tileW / 2;
-            const tileCenterY = tileH / 2;
-            const pieceCenterOnTileX = pieceX + pieceW / 2;
-            const pieceCenterOnTileY = pieceY + pieceH / 2;
-            
-            let offsetPackerX = tileCenterX - pieceCenterOnTileX;
-            let offsetPackerY = tileCenterY - pieceCenterOnTileY;
-            
-            let offset3dX, offset3dZ;
-            if (isRotatedOnTile) {
-              offset3dX = -offsetPackerY;
-              offset3dZ = offsetPackerX;
-            } else {
-              offset3dX = offsetPackerX;
-              offset3dZ = offsetPackerY;
-            }
-            
-            let tileGeo;
-            if (isBacksplash) {
-              tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.01);
-            } else {
-              if (isRotatedOnTile) {
-                tileGeo = new THREE.BoxGeometry(tileH, 0.01, tileW);
-              } else {
-                tileGeo = new THREE.BoxGeometry(tileW, 0.01, tileH);
-              }
-            }
-            
-            const fullTileLayoutInfo = {
-              x: 0, y: 0,
-              w: isRotatedOnTile ? layoutInfo.tileH : layoutInfo.tileW,
-              h: isRotatedOnTile ? layoutInfo.tileW : layoutInfo.tileH,
-              pieceW: layoutInfo.tileW, pieceH: layoutInfo.tileH,
-              tileW: layoutInfo.tileW, tileH: layoutInfo.tileH,
-              grainLengthwise: !isRotatedOnTile
-            };
-            
             const color = new THREE.Color(colorData.color);
-            const tileMat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.5 });
-            const tileMesh = new THREE.Mesh(tileGeo, tileMat);
-            tileMesh.renderOrder = -1;
-            
-            // Position in LOCAL space (as child of mesh)
-            if (isBacksplash) {
-              tileMesh.position.set(offset3dX, -offset3dZ, -0.005);
-            } else {
-              tileMesh.position.set(offset3dX, -0.005, offset3dZ);
-            }
-            
-            // Ensure tile helper has no local rotation
-            tileMesh.rotation.set(0, 0, 0);
-            
-            const textureLoader = new THREE.TextureLoader();
-            textureLoader.load(colorData.texture, (texture) => {
-              texture.wrapS = THREE.ClampToEdgeWrapping;
-              texture.wrapT = THREE.ClampToEdgeWrapping;
-              const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false, 0.5);
-              tileMesh.material.dispose();
-              tileMesh.material = tileTriplanarMat;
-              if (rendererRef.current && sceneRef.current && cameraRef.current) {
-                rendererRef.current.render(sceneRef.current, cameraRef.current);
-              }
-            });
-            
-            const tileEdges = new THREE.EdgesGeometry(tileGeo);
-            const tileLineMat = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2, depthTest: false });
-            const tileOutline = new THREE.LineSegments(tileEdges, tileLineMat);
-            tileOutline.renderOrder = 999;
-            tileMesh.add(tileOutline);
-            
-            tileMesh.userData.isDebugTileHelper = true;
-            mesh.add(tileMesh);  // Add as child of mesh
+            createTileHelper(mesh, layoutInfo, colorData, isBacksplash, color, { rendererRef, sceneRef, cameraRef });
           }
         }
         
@@ -4849,172 +4892,7 @@ function Configurator({ project, onBack }) {
       // Only for SELECTED elements to avoid visual clutter
       const isDebugActive = debugTexture && shouldHighlight;
       if (isDebugActive && layoutInfo && colorData.texture) {
-        const tileW = layoutInfo.tileW / 100; // tile width in meters
-        const tileH = layoutInfo.tileH / 100; // tile height in meters
-        
-        // Piece dimensions in meters (original, before rotation)
-        const meshW = layoutInfo.w / 100;  // piece mesh width (X axis)
-        const meshH = layoutInfo.h / 100;  // piece mesh depth (Z axis for slab, Y for backsplash)
-        
-        // Piece position on tile in packer coordinates (in meters)
-        const pieceX = layoutInfo.x / 100;
-        const pieceY = layoutInfo.y / 100;
-        const pieceW = layoutInfo.pieceW / 100;  // width on tile (may differ from meshW if rotated)
-        const pieceH = layoutInfo.pieceH / 100;  // height on tile (may differ from meshH if rotated)
-        
-        const isRotatedOnTile = layoutInfo.grainLengthwise === false;
-        const isBacksplash = el.type === 'backsplash';
-        
-        // The piece mesh is centered at origin in local space
-        // The tile helper needs to be positioned so that:
-        // - The tile's texture (full 320x160) aligns with the piece's texture region
-        //
-        // In local space of the piece:
-        // - Piece center is at (0, 0, 0)
-        // - For slab: X is length, Z is depth
-        // - Tile helper has same orientation
-        //
-        // We need to find where tile center should be relative to piece center
-        // 
-        // On the tile (packer coords, origin top-left):
-        // - Piece occupies from (pieceX, pieceY) to (pieceX+pieceW, pieceY+pieceH)
-        // - Piece center on tile: (pieceX + pieceW/2, pieceY + pieceH/2)
-        // - Tile center: (tileW/2, tileH/2)
-        //
-        // Offset from piece center to tile center (in tile/packer coordinates):
-        // - deltaX = tileW/2 - (pieceX + pieceW/2)
-        // - deltaY = tileH/2 - (pieceY + pieceH/2)
-        //
-        // But we need to map this to 3D local space:
-        // - Packer X -> 3D X (same direction)
-        // - Packer Y -> 3D Z for slab, but Y increases DOWN in packer, Z increases "forward" in 3D
-        
-        const tileCenterX = tileW / 2;
-        const tileCenterY = tileH / 2;
-        const pieceCenterOnTileX = pieceX + pieceW / 2;
-        const pieceCenterOnTileY = pieceY + pieceH / 2;
-        
-        // Offset from piece center to tile center (in packer/tile coordinates)
-        const offsetTileX = tileCenterX - pieceCenterOnTileX;
-        const offsetTileY = tileCenterY - pieceCenterOnTileY;
-        
-        // For tile helper, we'll add it to SCENE (not mesh) and position in world space
-        // This avoids issues with piece rotation affecting the helper
-        // Get piece world position
-        const pieceWorldPos = new THREE.Vector3();
-        mesh.getWorldPosition(pieceWorldPos);
-        
-        // Calculate tile center world position
-        // Tile coordinates: X is horizontal, Y is vertical (top-down view)
-        // 3D world for slab: X is horizontal, Z is depth (front-back)
-        // For non-rotated: tile X -> world X, tile Y -> world Z
-        // For rotated: the piece is rotated 90°, but tile helper should still show full tile in world orientation
-        
-        // Create tile geometry - use BoxGeometry like pieces for consistent normals
-        // Tile helper should show the FULL tile texture at correct position
-        // It's a child of the piece mesh, so it inherits piece rotation
-        let tileGeo;
-        if (isBacksplash) {
-          // Thin box for backsplash (X=width, Y=height, Z=thickness)
-          tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.01);
-        } else {
-          // Thin box for slab (X=width, Y=thickness, Z=depth)
-          // Use 0.01m thickness for better normal detection
-          if (isRotatedOnTile) {
-            // When piece is rotated, swap tile dimensions for helper
-            tileGeo = new THREE.BoxGeometry(tileH, 0.01, tileW);
-          } else {
-            tileGeo = new THREE.BoxGeometry(tileW, 0.01, tileH);
-          }
-        }
-        
-        // Create layout info for the FULL TILE (offset 0, scale 1)
-        // Match the piece's rotation state so shader applies same UV transform
-        const fullTileLayoutInfo = {
-          x: 0,
-          y: 0,
-          w: isRotatedOnTile ? layoutInfo.tileH : layoutInfo.tileW,  // Swap if rotated
-          h: isRotatedOnTile ? layoutInfo.tileW : layoutInfo.tileH,  // Swap if rotated
-          pieceW: layoutInfo.tileW,
-          pieceH: layoutInfo.tileH,
-          tileW: layoutInfo.tileW,
-          tileH: layoutInfo.tileH,
-          grainLengthwise: !isRotatedOnTile  // Match piece rotation
-        };
-        
-        // Load texture and create material using same shader
-        const textureLoader = new THREE.TextureLoader();
-        const tileMat = new THREE.MeshBasicMaterial({ 
-          color: color,
-          transparent: true,
-          opacity: 0.5
-        });
-        
-        // Create mesh FIRST so it's available in the texture load callback
-        const tileMesh = new THREE.Mesh(tileGeo, tileMat);
-        tileMesh.renderOrder = -1;
-        
-        // Position tile helper in LOCAL space of the piece (as child of mesh)
-        // This way it automatically inherits piece rotation
-        //
-        // Offset calculation:
-        // - Piece center is at local (0, 0, 0)
-        // - Tile center needs to be offset so piece aligns with its region on tile
-        // - offsetTileX = tileCenterX - pieceCenterOnTileX (positive = tile center is to the RIGHT of piece center)
-        // - offsetTileY = tileCenterY - pieceCenterOnTileY (positive = tile center is BELOW piece center in packer coords)
-        //
-        // Mapping to 3D local space:
-        // - Packer X -> Local X (same direction, positive = right)
-        // - Packer Y -> Local Z for slab (positive packer Y = "down" = positive local Z = "forward")
-        // - Packer Y -> Local -Y for backsplash (positive packer Y = "down" = negative local Y = "down")
-        
-        if (isBacksplash) {
-          // Backsplash: local X = width, local Y = height, local Z = thickness
-          // Packer Y (down) maps to local -Y (down)
-          tileMesh.position.set(offsetTileX, -offsetTileY, -0.005);
-        } else {
-          // Slab: local X = length, local Y = thickness, local Z = depth
-          // Packer Y (down) maps to local Z (forward)
-          tileMesh.position.set(offsetTileX, -0.005, offsetTileY);
-        }
-        
-        // Ensure tile helper has no local rotation (inherits parent rotation only)
-        tileMesh.rotation.set(0, 0, 0);
-        
-        // Add as CHILD of mesh - inherits rotation automatically
-        mesh.add(tileMesh);
-        
-        // Store reference for cleanup
-        tileMesh.userData.isDebugTileHelper = true;
-        tileMesh.userData.parentElementId = el.id;
-        
-        textureLoader.load(colorData.texture, (texture) => {
-          texture.wrapS = THREE.ClampToEdgeWrapping;
-          texture.wrapT = THREE.ClampToEdgeWrapping;
-          texture.anisotropy = rendererRef.current?.capabilities?.getMaxAnisotropy() || 4;
-          
-          // Use same triplanar material as pieces, but for full tile with 50% opacity
-          const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false, 0.5);
-          
-          tileMesh.material.dispose(); // Clean up old material
-          tileMesh.material = tileTriplanarMat;
-          
-          // Force a re-render
-          if (rendererRef.current && sceneRef.current && cameraRef.current) {
-            rendererRef.current.render(sceneRef.current, cameraRef.current);
-          }
-        });
-        
-        // Add cyan wireframe border
-        const tileEdges = new THREE.EdgesGeometry(tileGeo);
-        const tileLineMat = new THREE.LineBasicMaterial({ 
-          color: 0x00ffff,
-          linewidth: 2,
-          depthTest: false,
-        });
-        const tileOutline = new THREE.LineSegments(tileEdges, tileLineMat);
-        tileOutline.renderOrder = 999;
-        tileMesh.add(tileOutline);
+        createTileHelper(mesh, layoutInfo, colorData, isBacksplash, color, { rendererRef, sceneRef, cameraRef });
       }
     });
     
