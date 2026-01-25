@@ -401,9 +401,17 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   const isRotatedOnTile = layoutInfo.grainLengthwise === false;
   
   // UV offset and scale - these define where on the tile texture this piece maps
-  // The Y flip is handled in the shader, so offset is straightforward
+  // 
+  // Coordinate systems:
+  // - Packer: origin top-left, Y increases downward
+  // - Shader UV after flip (uv.y = 1 - uv.y): origin bottom-left, but we sample from top
+  // 
+  // After shader flips uv.y, a piece at packer position (x, y) needs offset:
+  // - uvOffsetX = pieceX / tileW (unchanged)
+  // - uvOffsetY needs adjustment: when shader does 1-uv.y, we need to offset from the OTHER end
+  //   Formula: uvOffsetY = 1 - (pieceY + pieceH) / tileH = (tileH - pieceY - pieceH) / tileH
   const uvOffsetX = pieceX / tileW;
-  const uvOffsetY = pieceY / tileH;
+  const uvOffsetY = (tileH - pieceY - pieceH) / tileH;  // Compensate for shader's Y flip
   const uvScaleX = pieceW / tileW;
   const uvScaleY = pieceH / tileH;
   
@@ -4731,6 +4739,17 @@ function Configurator({ project, onBack }) {
           opacity: 0.5
         });
         
+        // Create mesh FIRST so it's available in the texture load callback
+        const tileMesh = new THREE.Mesh(tileGeo, tileMat);
+        tileMesh.renderOrder = -1;
+        
+        // Position tile helper relative to piece
+        if (isBacksplash) {
+          tileMesh.position.set(offsetX, -offsetZ, -0.002);
+        } else {
+          tileMesh.position.set(offsetX, -0.002, offsetZ);
+        }
+        
         textureLoader.load(colorData.texture, (texture) => {
           texture.wrapS = THREE.ClampToEdgeWrapping;
           texture.wrapT = THREE.ClampToEdgeWrapping;
@@ -4745,16 +4764,6 @@ function Configurator({ project, onBack }) {
           tileMesh.material = tileTriplanarMat;
           tileMesh.material.needsUpdate = true;
         });
-        
-        const tileMesh = new THREE.Mesh(tileGeo, tileMat);
-        tileMesh.renderOrder = -1;
-        
-        // Position tile helper relative to piece
-        if (isBacksplash) {
-          tileMesh.position.set(offsetX, -offsetZ, -0.002);
-        } else {
-          tileMesh.position.set(offsetX, -0.002, offsetZ);
-        }
         
         // Add cyan wireframe border
         const tileEdges = new THREE.EdgesGeometry(tileGeo);
