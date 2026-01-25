@@ -41,6 +41,7 @@ const CUTOUT_PRESETS = {
   'sink-single':     { type: 'rectangle', width: 50, height: 40, cornerRadius: 5, name: 'Chiuvetă simplă', icon: '🚰', forTypes: ['island'] },
   'sink-double':     { type: 'rectangle', width: 80, height: 45, cornerRadius: 5, name: 'Chiuvetă dublă', icon: '🚰', forTypes: ['island'] },
   'sink-round':      { type: 'circle', radius: 22, name: 'Chiuvetă rotundă', icon: '🚰', forTypes: ['island'] },
+  'tap-32':          { type: 'circle', radius: 1.6, name: 'Baterie Ø32mm', icon: '🚿', forTypes: ['island'] },
   'hob-60':          { type: 'rectangle', width: 56, height: 49, cornerRadius: 3, name: 'Plită 60cm', icon: '🔥', forTypes: ['island'] },
   'hob-70':          { type: 'rectangle', width: 65, height: 49, cornerRadius: 3, name: 'Plită 70cm', icon: '🔥', forTypes: ['island'] },
   'hob-80':          { type: 'rectangle', width: 75, height: 49, cornerRadius: 3, name: 'Plită 80cm', icon: '🔥', forTypes: ['island'] },
@@ -3094,7 +3095,7 @@ function Configurator({ project, onBack }) {
         
         rawPositions[selectedGroupId] = { x: newX, z: newZ };
         
-        // Snap group elements to other elements (edge to edge)
+        // Snap group elements to other elements (using 5 snap points)
         if (snapEnabled) {
           const SNAP_THRESHOLD = 0.10;
           const snapIndicators = [];
@@ -3107,7 +3108,7 @@ function Configurator({ project, onBack }) {
           
           // Check each group member against non-group elements
           groupMembers.forEach(member => {
-            if (snapDeltaX !== null && snapDeltaZ !== null) return; // Already found both snaps
+            if (snapDeltaX !== null && snapDeltaZ !== null) return;
             
             // Calculate member's would-be world position
             const localX = member.localOffset?.x || 0;
@@ -3121,10 +3122,16 @@ function Configurator({ project, onBack }) {
             let memberD = member.type === 'backsplash' ? (member.thickness || 12) / 1000 : member.depth / 100;
             if (isRotated90) [memberW, memberD] = [memberD, memberW];
             
-            const memberLeft = memberWorldX - memberW / 2;
-            const memberRight = memberWorldX + memberW / 2;
-            const memberFront = memberWorldZ - memberD / 2;
-            const memberBack = memberWorldZ + memberD / 2;
+            const memberY = (member.placementHeight || 0) / 100;
+            
+            // Member's 5 snap points
+            const memberPoints = [
+              { x: memberWorldX - memberW / 2, z: memberWorldZ - memberD / 2 },
+              { x: memberWorldX + memberW / 2, z: memberWorldZ - memberD / 2 },
+              { x: memberWorldX - memberW / 2, z: memberWorldZ + memberD / 2 },
+              { x: memberWorldX + memberW / 2, z: memberWorldZ + memberD / 2 },
+              { x: memberWorldX, z: memberWorldZ - memberD / 2 }, // Front-center
+            ];
             
             elements.forEach(other => {
               if (other.groupId === selectedGroupId) return;
@@ -3136,30 +3143,31 @@ function Configurator({ project, onBack }) {
               let otherD = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
               if (otherIsRotated90) [otherW, otherD] = [otherD, otherW];
               
-              const otherLeft = otherPos.x - otherW / 2;
-              const otherRight = otherPos.x + otherW / 2;
-              const otherFront = otherPos.z - otherD / 2;
-              const otherBack = otherPos.z + otherD / 2;
+              const otherY = (other.placementHeight || 0) / 100;
+              const heightDiff = Math.abs(memberY - otherY);
+              const snapType = heightDiff > 0.01 ? 'warning' : 'element';
               
-              // X snaps
-              if (snapDeltaX === null && Math.abs(memberRight - otherLeft) < SNAP_THRESHOLD) {
-                snapDeltaX = otherLeft - memberRight;
-                snapIndicators.push({ x: otherLeft, z: memberWorldZ, axis: 'x' });
-              }
-              if (snapDeltaX === null && Math.abs(memberLeft - otherRight) < SNAP_THRESHOLD) {
-                snapDeltaX = otherRight - memberLeft;
-                snapIndicators.push({ x: otherRight, z: memberWorldZ, axis: 'x' });
-              }
+              // Other's 5 snap points
+              const otherPoints = [
+                { x: otherPos.x - otherW / 2, z: otherPos.z - otherD / 2 },
+                { x: otherPos.x + otherW / 2, z: otherPos.z - otherD / 2 },
+                { x: otherPos.x - otherW / 2, z: otherPos.z + otherD / 2 },
+                { x: otherPos.x + otherW / 2, z: otherPos.z + otherD / 2 },
+                { x: otherPos.x, z: otherPos.z - otherD / 2 },
+              ];
               
-              // Z snaps
-              if (snapDeltaZ === null && Math.abs(memberBack - otherFront) < SNAP_THRESHOLD) {
-                snapDeltaZ = otherFront - memberBack;
-                snapIndicators.push({ x: memberWorldX, z: otherFront, axis: 'z' });
-              }
-              if (snapDeltaZ === null && Math.abs(memberFront - otherBack) < SNAP_THRESHOLD) {
-                snapDeltaZ = otherBack - memberFront;
-                snapIndicators.push({ x: memberWorldX, z: otherBack, axis: 'z' });
-              }
+              memberPoints.forEach(mp => {
+                otherPoints.forEach(op => {
+                  if (snapDeltaX === null && Math.abs(mp.x - op.x) < SNAP_THRESHOLD) {
+                    snapDeltaX = op.x - mp.x;
+                    snapIndicators.push({ x: op.x, z: (mp.z + op.z) / 2, axis: 'x', y: memberY, type: snapType });
+                  }
+                  if (snapDeltaZ === null && Math.abs(mp.z - op.z) < SNAP_THRESHOLD) {
+                    snapDeltaZ = op.z - mp.z;
+                    snapIndicators.push({ x: (mp.x + op.x) / 2, z: op.z, axis: 'z', y: memberY, type: snapType });
+                  }
+                });
+              });
             });
           });
           
@@ -3217,10 +3225,15 @@ function Configurator({ project, onBack }) {
             let movingDepth = el.type === 'backsplash' ? (el.thickness || 12) / 1000 : el.depth / 100;
             if (isRotated90) [movingWidth, movingDepth] = [movingDepth, movingWidth];
             
-            const movingLeft = newX - movingWidth / 2;
-            const movingRight = newX + movingWidth / 2;
-            const movingFront = newZ - movingDepth / 2;
-            const movingBack = newZ + movingDepth / 2;
+            // Moving element's 5 snap points: 4 corners + center front
+            const movingY = (el.placementHeight || 0) / 100; // Height of moving element
+            const movingPoints = [
+              { x: newX - movingWidth / 2, z: newZ - movingDepth / 2, name: 'FL' }, // Front-Left
+              { x: newX + movingWidth / 2, z: newZ - movingDepth / 2, name: 'FR' }, // Front-Right
+              { x: newX - movingWidth / 2, z: newZ + movingDepth / 2, name: 'BL' }, // Back-Left
+              { x: newX + movingWidth / 2, z: newZ + movingDepth / 2, name: 'BR' }, // Back-Right
+              { x: newX, z: newZ - movingDepth / 2, name: 'FC' }, // Front-Center
+            ];
             
             let snapX = null, snapZ = null;
             
@@ -3235,41 +3248,81 @@ function Configurator({ project, onBack }) {
               let otherDepth = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
               if (otherIsRotated90) [otherWidth, otherDepth] = [otherDepth, otherWidth];
               
-              const otherLeft = otherPos.x - otherWidth / 2;
-              const otherRight = otherPos.x + otherWidth / 2;
-              const otherFront = otherPos.z - otherDepth / 2;
-              const otherBack = otherPos.z + otherDepth / 2;
+              // Other element's 5 snap points
+              const otherY = (other.placementHeight || 0) / 100;
+              const otherPoints = [
+                { x: otherPos.x - otherWidth / 2, z: otherPos.z - otherDepth / 2, name: 'FL' },
+                { x: otherPos.x + otherWidth / 2, z: otherPos.z - otherDepth / 2, name: 'FR' },
+                { x: otherPos.x - otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BL' },
+                { x: otherPos.x + otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BR' },
+                { x: otherPos.x, z: otherPos.z - otherDepth / 2, name: 'FC' },
+              ];
               
-              // X snaps - edge to edge
-              if (snapX === null && Math.abs(movingRight - otherLeft) < SNAP_THRESHOLD) {
-                snapX = otherLeft - movingWidth / 2;
-                snapIndicators.push({ x: otherLeft, z: newZ, axis: 'x' });
-              }
-              if (snapX === null && Math.abs(movingLeft - otherRight) < SNAP_THRESHOLD) {
-                snapX = otherRight + movingWidth / 2;
-                snapIndicators.push({ x: otherRight, z: newZ, axis: 'x' });
-              }
-              // Center to center X
-              if (snapX === null && Math.abs(newX - otherPos.x) < SNAP_THRESHOLD) {
-                snapX = otherPos.x;
-                snapIndicators.push({ x: otherPos.x, z: newZ, axis: 'x' });
-              }
+              // Determine snap type based on height difference
+              const heightDiff = Math.abs(movingY - otherY);
+              const snapType = heightDiff > 0.01 ? 'warning' : 'element'; // Red if different heights
+              const indicatorY = movingY; // Use height of element being dragged
               
-              // Z snaps - edge to edge
-              if (snapZ === null && Math.abs(movingBack - otherFront) < SNAP_THRESHOLD) {
-                snapZ = otherFront - movingDepth / 2;
-                snapIndicators.push({ x: newX, z: otherFront, axis: 'z' });
-              }
-              if (snapZ === null && Math.abs(movingFront - otherBack) < SNAP_THRESHOLD) {
-                snapZ = otherBack + movingDepth / 2;
-                snapIndicators.push({ x: newX, z: otherBack, axis: 'z' });
-              }
-              // Center to center Z
-              if (snapZ === null && Math.abs(newZ - otherPos.z) < SNAP_THRESHOLD) {
-                snapZ = otherPos.z;
-                snapIndicators.push({ x: newX, z: otherPos.z, axis: 'z' });
-              }
+              // Check all point combinations for snap
+              movingPoints.forEach(mp => {
+                otherPoints.forEach(op => {
+                  // X snap - align X coordinates of any two points
+                  if (snapX === null && Math.abs(mp.x - op.x) < SNAP_THRESHOLD) {
+                    const deltaX = op.x - mp.x;
+                    snapX = newX + deltaX;
+                    snapIndicators.push({ 
+                      x: op.x, 
+                      z: (mp.z + op.z) / 2, 
+                      axis: 'x', 
+                      y: indicatorY,
+                      type: snapType 
+                    });
+                  }
+                  
+                  // Z snap - align Z coordinates of any two points
+                  if (snapZ === null && Math.abs(mp.z - op.z) < SNAP_THRESHOLD) {
+                    const deltaZ = op.z - mp.z;
+                    snapZ = newZ + deltaZ;
+                    snapIndicators.push({ 
+                      x: (mp.x + op.x) / 2, 
+                      z: op.z, 
+                      axis: 'z', 
+                      y: indicatorY,
+                      type: snapType 
+                    });
+                  }
+                });
+              });
             });
+            
+            // Grid snap (if no element snap found) - use blue color
+            const GRID_SIZE = 0.1; // 10cm grid
+            if (snapX === null) {
+              const gridX = Math.round(newX / GRID_SIZE) * GRID_SIZE;
+              if (Math.abs(newX - gridX) < SNAP_THRESHOLD / 2) {
+                snapX = gridX;
+                snapIndicators.push({ 
+                  x: gridX, 
+                  z: newZ, 
+                  axis: 'x', 
+                  y: (el.placementHeight || 0) / 100,
+                  type: 'grid' 
+                });
+              }
+            }
+            if (snapZ === null) {
+              const gridZ = Math.round(newZ / GRID_SIZE) * GRID_SIZE;
+              if (Math.abs(newZ - gridZ) < SNAP_THRESHOLD / 2) {
+                snapZ = gridZ;
+                snapIndicators.push({ 
+                  x: newX, 
+                  z: gridZ, 
+                  axis: 'z', 
+                  y: (el.placementHeight || 0) / 100,
+                  type: 'grid' 
+                });
+              }
+            }
             
             if (snapX !== null) {
               snapDeltaX = snapX - newX;
@@ -3524,6 +3577,13 @@ function Configurator({ project, onBack }) {
       depthTest: false  // Render on top of everything
     });
     
+    // Materials for different snap types
+    const snapMaterials = {
+      element: new THREE.LineBasicMaterial({ color: 0x00ff00, depthTest: false }), // Green - same height
+      grid: new THREE.LineBasicMaterial({ color: 0x4488ff, depthTest: false }),    // Blue - grid snap
+      warning: new THREE.LineBasicMaterial({ color: 0xff4444, depthTest: false })  // Red - different heights
+    };
+    
     window.updateSnapIndicators = (indicators) => {
       // Remove old indicators
       snapIndicatorMeshes.forEach(mesh => scene.remove(mesh));
@@ -3531,31 +3591,35 @@ function Configurator({ project, onBack }) {
       
       // Add new indicators
       indicators.forEach(ind => {
-        // Create a vertical line at snap point
+        const y = ind.y ?? 0.01; // Use provided height or default
+        const snapType = ind.type || 'element'; // 'element', 'grid', or 'warning'
+        const material = snapMaterials[snapType] || snapMaterials.element;
+        
+        // Create a line at snap point at correct height
         const points = [];
         if (ind.axis === 'x') {
-          points.push(new THREE.Vector3(ind.x, 0, ind.z - 2));
-          points.push(new THREE.Vector3(ind.x, 0, ind.z + 2));
+          points.push(new THREE.Vector3(ind.x, y, ind.z - 2));
+          points.push(new THREE.Vector3(ind.x, y, ind.z + 2));
         } else {
-          points.push(new THREE.Vector3(ind.x - 2, 0, ind.z));
-          points.push(new THREE.Vector3(ind.x + 2, 0, ind.z));
+          points.push(new THREE.Vector3(ind.x - 2, y, ind.z));
+          points.push(new THREE.Vector3(ind.x + 2, y, ind.z));
         }
         
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
-        const line = new THREE.Line(geometry, snapLineMaterial);
-        line.position.y = 0.01;
+        const line = new THREE.Line(geometry, material);
         line.renderOrder = 999; // Render last
         scene.add(line);
         snapIndicatorMeshes.push(line);
         
-        // Add a small sphere at intersection
+        // Add a small sphere at intersection with matching color
         const sphereGeo = new THREE.SphereGeometry(0.03, 8, 8);
+        const sphereColor = snapType === 'warning' ? 0xff4444 : (snapType === 'grid' ? 0x4488ff : 0x4a9962);
         const sphereMat = new THREE.MeshBasicMaterial({ 
-          color: 0x4a9962,
+          color: sphereColor,
           depthTest: false  // Render on top
         });
         const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-        sphere.position.set(ind.x, 0.02, ind.z);
+        sphere.position.set(ind.x, y + 0.01, ind.z);
         sphere.renderOrder = 999; // Render last
         scene.add(sphere);
         snapIndicatorMeshes.push(sphere);
@@ -4436,7 +4500,54 @@ function Configurator({ project, onBack }) {
   };
 
   const updateElement = (id, updates) => {
-    setElements(elements.map(el => el.id === id ? { ...el, ...updates } : el));
+    setElements(elements.map(el => {
+      if (el.id !== id) return el;
+      
+      // Check if length is changing and element has cutouts
+      if (updates.length !== undefined && el.cutouts && el.cutouts.length > 0) {
+        const oldLength = el.length;
+        const newLength = updates.length;
+        const lengthDelta = newLength - oldLength;
+        
+        if (lengthDelta !== 0) {
+          // Reposition cutouts to maintain their cotaStânga (distance from left edge)
+          // When piece grows symmetrically, center moves by delta/2
+          // To keep cotaStânga constant, we need to shift cutout center by delta/2
+          const updatedCutouts = el.cutouts.map(cutout => ({
+            ...cutout,
+            center: {
+              ...cutout.center,
+              x: cutout.center.x + lengthDelta / 2
+            }
+          }));
+          
+          return { ...el, ...updates, cutouts: updatedCutouts };
+        }
+      }
+      
+      // Same logic for depth/height changes (maintain cotaFață)
+      const depthKey = el.type === 'backsplash' ? 'height' : 'depth';
+      if (updates[depthKey] !== undefined && el.cutouts && el.cutouts.length > 0) {
+        const oldDepth = el[depthKey];
+        const newDepth = updates[depthKey];
+        const depthDelta = newDepth - oldDepth;
+        
+        if (depthDelta !== 0) {
+          // Reposition cutouts to maintain their cotaFață (distance from front edge)
+          const updatedCutouts = (updates.cutouts || el.cutouts).map(cutout => ({
+            ...cutout,
+            center: {
+              ...cutout.center,
+              z: cutout.center.z + depthDelta / 2
+            }
+          }));
+          
+          return { ...el, ...updates, cutouts: updatedCutouts };
+        }
+      }
+      
+      return { ...el, ...updates };
+    }));
   };
 
   const removeElement = (id) => {
@@ -5395,6 +5506,7 @@ function Configurator({ project, onBack }) {
                         <option value="sink-single">Chiuvetă simplă (50×40cm)</option>
                         <option value="sink-double">Chiuvetă dublă (80×45cm)</option>
                         <option value="sink-round">Chiuvetă rotundă (Ø44cm)</option>
+                        <option value="tap-32">Baterie Ø32mm</option>
                       </optgroup>
                     )}
                     {selected.type === 'island' && (
