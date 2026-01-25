@@ -2460,7 +2460,8 @@ function Configurator({ project, onBack }) {
     const group = groups[el.groupId];
     const pivotX = group.position?.x || 0;
     const pivotZ = group.position?.z || 0;
-    const groupRot = (group.rotation || 0) * Math.PI / 180;
+    // NEGATIVE angle to match Three.js Y rotation direction
+    const groupRot = -(group.rotation || 0) * Math.PI / 180;
     const localX = el.localOffset?.x || 0;
     const localZ = el.localOffset?.z || 0;
     
@@ -2702,7 +2703,8 @@ function Configurator({ project, onBack }) {
         const pendingGroup = pendingGroupTransforms[el.groupId];
         const pivotX = pendingGroup?.position?.x ?? groups[el.groupId].position?.x ?? 0;
         const pivotZ = pendingGroup?.position?.z ?? groups[el.groupId].position?.z ?? 0;
-        const groupRot = ((pendingGroup?.rotation ?? groups[el.groupId].rotation) || 0) * Math.PI / 180;
+        // NEGATIVE angle to match Three.js Y rotation direction
+        const groupRot = -((pendingGroup?.rotation ?? groups[el.groupId].rotation) || 0) * Math.PI / 180;
         const localX = el.localOffset?.x || 0;
         const localZ = el.localOffset?.z || 0;
         
@@ -2990,15 +2992,14 @@ function Configurator({ project, onBack }) {
         // Get group center (pivot point in world space)
         const pivotX = pending.position.x;
         const pivotZ = pending.position.z;
-        const angleRad = newRot * Math.PI / 180;
+        // NEGATIVE angle for position rotation to match Three.js Y rotation direction
+        const angleRad = -newRot * Math.PI / 180;
         
         // Update all group member meshes using proper world transform
         elements.filter(e => e.groupId === selectedGroupId).forEach(el => {
           const mesh = meshesRef.current[el.id];
           if (!mesh) return;
           
-          // Get the element's ORIGINAL world position (before any group rotation)
-          // This is: groupPos + localOffset (with no rotation applied)
           const localX = el.localOffset?.x || 0;
           const localZ = el.localOffset?.z || 0;
           const localRot = el.localRotation || 0;
@@ -3007,10 +3008,7 @@ function Configurator({ project, onBack }) {
           const origWorldX = pivotX + localX;
           const origWorldZ = pivotZ + localZ;
           
-          // Apply Delta rotation around pivot:
-          // 1. Translate to pivot origin
-          // 2. Rotate
-          // 3. Translate back
+          // Apply Delta rotation around pivot
           const dx = origWorldX - pivotX;
           const dz = origWorldZ - pivotZ;
           
@@ -3020,7 +3018,7 @@ function Configurator({ project, onBack }) {
           const newWorldX = pivotX + dx * cosR - dz * sinR;
           const newWorldZ = pivotZ + dx * sinR + dz * cosR;
           
-          // Element's world rotation = its local rotation + group rotation
+          // Element's world rotation (positive for Three.js Y rotation)
           const newWorldRot = localRot + newRot;
           
           mesh.position.x = newWorldX;
