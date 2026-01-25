@@ -4483,17 +4483,22 @@ function Configurator({ project, onBack }) {
             
             let tileGeo;
             if (isBacksplash) {
-              tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.001);
+              tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.01);
             } else {
-              tileGeo = new THREE.BoxGeometry(tileW, 0.001, tileH);
+              if (isRotatedOnTile) {
+                tileGeo = new THREE.BoxGeometry(tileH, 0.01, tileW);
+              } else {
+                tileGeo = new THREE.BoxGeometry(tileW, 0.01, tileH);
+              }
             }
             
             const fullTileLayoutInfo = {
               x: 0, y: 0,
-              w: layoutInfo.tileW, h: layoutInfo.tileH,
+              w: isRotatedOnTile ? layoutInfo.tileH : layoutInfo.tileW,
+              h: isRotatedOnTile ? layoutInfo.tileW : layoutInfo.tileH,
               pieceW: layoutInfo.tileW, pieceH: layoutInfo.tileH,
               tileW: layoutInfo.tileW, tileH: layoutInfo.tileH,
-              grainLengthwise: true
+              grainLengthwise: !isRotatedOnTile
             };
             
             const color = new THREE.Color(colorData.color);
@@ -4514,6 +4519,9 @@ function Configurator({ project, onBack }) {
               const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false, 0.5);
               tileMesh.material.dispose();
               tileMesh.material = tileTriplanarMat;
+              if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                rendererRef.current.render(sceneRef.current, cameraRef.current);
+              }
             });
             
             const tileEdges = new THREE.EdgesGeometry(tileGeo);
