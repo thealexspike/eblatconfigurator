@@ -4405,8 +4405,10 @@ function Configurator({ project, onBack }) {
       const hasWaterfall = el.waterfallLeft || el.waterfallRight;
       
       // If debug mode changed, force full mesh recreation to update shader
-      // If only selection or groupId changed and NO waterfall, update outline without recreating
-      if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
+      // If debug mode is ACTIVE and selection changed, also force recreation (to update transparency)
+      // If only selection or groupId changed and NO waterfall and NO debug mode, update outline without recreating
+      const needsRecreationForDebug = debugTexture && selectionChanged;
+      if (!isNew && !geometryChanged && !debugModeChanged && !needsRecreationForDebug && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         
         // Remove existing outlines AND debug tile helpers from mesh
