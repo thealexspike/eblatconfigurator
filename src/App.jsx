@@ -471,8 +471,15 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
         }
       } else if (uIsWaterfall) {
         // Waterfall: vertical panel on side of slab
-        // Mesh: X = thickness, Y = height (waterfallHeight), Z = depth
-        // The piece on tile: pieceW = waterfallHeight, pieceH = depth
+        // Mesh geometry: BoxGeometry(thickness, height=waterfallH, depth)
+        // - Mesh Y axis = height (waterfallH = 90cm)
+        // - Mesh Z axis = depth (60cm)
+        //
+        // Layout info: w = depth, h = waterfallH (swapped from mesh axes!)
+        // - uMeshSize.x = w = depth (what's on mesh Z)
+        // - uMeshSize.y = h = waterfallH (what's on mesh Y)
+        //
+        // On tile (packer): pieceW = waterfallH, pieceH = depth
         
         // Exterior face only
         if (uIsLeftWaterfall) {
@@ -482,12 +489,15 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
         }
         
         if (isMainFace) {
-          // Waterfall is "unfolded" from slab - imagine laying it flat
-          // Mesh Y (height) corresponds to pieceW (horizontal on tile)
-          // Mesh Z (depth) corresponds to pieceH (vertical on tile)
-          float normY = (vLocalPosition.y / uMeshSize.x) + 0.5;  // Y -> pieceW direction
-          float normZ = (vLocalPosition.z / uMeshSize.y) + 0.5;  // Z -> pieceH direction
+          // Map mesh coords to 0-1 range
+          // Mesh Y (height) uses uMeshSize.y (which is h = waterfallH)
+          // Mesh Z (depth) uses uMeshSize.x (which is w = depth)
+          float normY = (vLocalPosition.y / uMeshSize.y) + 0.5;  // 0-1 along height
+          float normZ = (vLocalPosition.z / uMeshSize.x) + 0.5;  // 0-1 along depth
           
+          // On tile: pieceW = waterfallH (horizontal), pieceH = depth (vertical)
+          // normY (height) -> localUV.x (maps to pieceW)
+          // normZ (depth) -> localUV.y (maps to pieceH)
           localUV.x = normY;
           localUV.y = 1.0 - normZ;  // Flip to match packer Y direction
           
