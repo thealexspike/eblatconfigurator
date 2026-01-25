@@ -372,6 +372,108 @@ function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [],
   return geometry;
 }
 
+/**
+ * Creates a triplanar shader material for proper texture mapping
+ * This projects texture from top (Y) for slabs and from front (Z) for backsplashes
+ * Works correctly regardless of geometry complexity (holes, extrusions, etc.)
+ * 
+ * @param {THREE.Texture} texture - The texture to apply
+ * @param {Object} layoutInfo - Layout info with tile/piece positions
+ * @param {boolean} isBacksplash - If true, project from Z axis, else from Y
+ * @param {THREE.Color} fallbackColor - Color to use if no texture
+ */
+function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor) {
+  if (!texture || !layoutInfo) {
+    return new THREE.MeshBasicMaterial({ color: fallbackColor || 0x666666 });
+  }
+  
+  // Calculate UV offset and scale based on piece position on tile
+  // layoutInfo contains: x, y (position on tile), pieceW, pieceH, tileW, tileH
+  const tileW = layoutInfo.tileW / 100; // Convert to meters
+  const tileH = layoutInfo.tileH / 100;
+  const pieceX = layoutInfo.x / 100; // Position on tile in meters
+  const pieceY = layoutInfo.y / 100;
+  const pieceW = layoutInfo.pieceW / 100;
+  const pieceH = layoutInfo.pieceH / 100;
+  
+  // UV offset: where the piece starts on the tile (0-1 range)
+  const uvOffsetX = pieceX / tileW;
+  const uvOffsetY = pieceY / tileH;
+  
+  // UV scale: how much of the tile texture this piece uses
+  const uvScaleX = pieceW / tileW;
+  const uvScaleY = pieceH / tileH;
+  
+  const vertexShader = `
+    varying vec3 vWorldPosition;
+    varying vec3 vNormal;
+    
+    void main() {
+      vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+      vNormal = normalize(normalMatrix * normal);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `;
+  
+  const fragmentShader = `
+    uniform sampler2D uTexture;
+    uniform vec2 uTileSize;      // Tile size in meters
+    uniform vec2 uPieceOffset;   // Piece position on tile (0-1)
+    uniform vec2 uPieceScale;    // Piece size relative to tile (0-1)
+    uniform vec3 uMeshCenter;    // Center of the mesh in world coords
+    uniform vec2 uMeshSize;      // Size of the mesh (width, depth/height)
+    uniform bool uIsBacksplash;
+    
+    varying vec3 vWorldPosition;
+    varying vec3 vNormal;
+    
+    void main() {
+      vec2 uv;
+      
+      // Calculate local position relative to mesh center
+      vec3 localPos = vWorldPosition - uMeshCenter;
+      
+      if (uIsBacksplash) {
+        // Backsplash: project from Z axis (front view)
+        // X = horizontal, Y = vertical
+        uv.x = (localPos.x / uMeshSize.x) + 0.5;
+        uv.y = (localPos.y / uMeshSize.y) + 0.5;
+      } else {
+        // Slab: project from Y axis (top view)
+        // X = horizontal (length), Z = depth
+        uv.x = (localPos.x / uMeshSize.x) + 0.5;
+        uv.y = (localPos.z / uMeshSize.y) + 0.5;
+      }
+      
+      // Map UV from piece space (0-1) to tile space
+      // uv 0-1 on piece -> actual position on tile texture
+      vec2 tileUV = uPieceOffset + uv * uPieceScale;
+      
+      // Clamp to piece bounds to prevent bleeding
+      tileUV = clamp(tileUV, uPieceOffset, uPieceOffset + uPieceScale);
+      
+      gl_FragColor = texture2D(uTexture, tileUV);
+    }
+  `;
+  
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uTexture: { value: texture },
+      uTileSize: { value: new THREE.Vector2(tileW, tileH) },
+      uPieceOffset: { value: new THREE.Vector2(uvOffsetX, uvOffsetY) },
+      uPieceScale: { value: new THREE.Vector2(uvScaleX, uvScaleY) },
+      uMeshCenter: { value: new THREE.Vector3(0, 0, 0) }, // Will be updated
+      uMeshSize: { value: new THREE.Vector2(pieceW, pieceH) },
+      uIsBacksplash: { value: isBacksplash }
+    },
+    vertexShader,
+    fragmentShader,
+    side: THREE.DoubleSide
+  });
+  
+  return material;
+}
+
 // ============================================
 // LAYOUT & TEXTURE MAPPING - SINGLE SOURCE OF TRUTH
 // ============================================
@@ -1158,6 +1260,7 @@ const inputStyle = {
   width: '100%',
   padding: '10px 12px',
   background: '#1a1a1a',
+  backgroundColor: '#1a1a1a', // Explicit for browsers that ignore 'background'
   border: '1px solid #333',
   borderRadius: '6px',
   color: '#fff',
@@ -1165,6 +1268,9 @@ const inputStyle = {
   outline: 'none',
   boxSizing: 'border-box',
   userSelect: 'text',
+  WebkitAppearance: 'none', // Remove default browser styling
+  MozAppearance: 'none',
+  appearance: 'none',
 };
 
 const buttonStyle = {
@@ -3296,31 +3402,39 @@ function Configurator({ project, onBack }) {
             });
             
             // Grid snap (if no element snap found) - use blue color
-            const GRID_SIZE = 0.1; // 10cm grid
+            // Priority: 60cm (kitchen module) > 10cm (fine grid)
+            const GRID_60 = 0.6; // 60cm - kitchen module
+            const GRID_10 = 0.1; // 10cm - fine grid
+            const indicatorY = (el.placementHeight || 0) / 100;
+            
             if (snapX === null) {
-              const gridX = Math.round(newX / GRID_SIZE) * GRID_SIZE;
-              if (Math.abs(newX - gridX) < SNAP_THRESHOLD / 2) {
-                snapX = gridX;
-                snapIndicators.push({ 
-                  x: gridX, 
-                  z: newZ, 
-                  axis: 'x', 
-                  y: (el.placementHeight || 0) / 100,
-                  type: 'grid' 
-                });
+              // Try 60cm grid first (stronger snap)
+              const grid60X = Math.round(newX / GRID_60) * GRID_60;
+              if (Math.abs(newX - grid60X) < SNAP_THRESHOLD) {
+                snapX = grid60X;
+                snapIndicators.push({ x: grid60X, z: newZ, axis: 'x', y: indicatorY, type: 'grid' });
+              } else {
+                // Try 10cm grid
+                const grid10X = Math.round(newX / GRID_10) * GRID_10;
+                if (Math.abs(newX - grid10X) < SNAP_THRESHOLD / 2) {
+                  snapX = grid10X;
+                  snapIndicators.push({ x: grid10X, z: newZ, axis: 'x', y: indicatorY, type: 'grid' });
+                }
               }
             }
             if (snapZ === null) {
-              const gridZ = Math.round(newZ / GRID_SIZE) * GRID_SIZE;
-              if (Math.abs(newZ - gridZ) < SNAP_THRESHOLD / 2) {
-                snapZ = gridZ;
-                snapIndicators.push({ 
-                  x: newX, 
-                  z: gridZ, 
-                  axis: 'z', 
-                  y: (el.placementHeight || 0) / 100,
-                  type: 'grid' 
-                });
+              // Try 60cm grid first
+              const grid60Z = Math.round(newZ / GRID_60) * GRID_60;
+              if (Math.abs(newZ - grid60Z) < SNAP_THRESHOLD) {
+                snapZ = grid60Z;
+                snapIndicators.push({ x: newX, z: grid60Z, axis: 'z', y: indicatorY, type: 'grid' });
+              } else {
+                // Try 10cm grid
+                const grid10Z = Math.round(newZ / GRID_10) * GRID_10;
+                if (Math.abs(newZ - grid10Z) < SNAP_THRESHOLD / 2) {
+                  snapZ = grid10Z;
+                  snapIndicators.push({ x: newX, z: grid10Z, axis: 'z', y: indicatorY, type: 'grid' });
+                }
               }
             }
             
@@ -3563,9 +3677,77 @@ function Configurator({ project, onBack }) {
     const ambient = new THREE.AmbientLight(0xffffff, 1.0);
     scene.add(ambient);
 
-    // Grid
-    const grid = new THREE.GridHelper(10, 20, 0x333333, 0x222222);
-    scene.add(grid);
+    // Create XYZ corner grid system (like a 3D graph)
+    const gridSize = 5; // 5 meters in each direction
+    const gridDivisions = 10; // 50cm divisions
+    const gridColor = 0x333333;
+    const gridColorSecondary = 0x222222;
+    
+    // Floor grid (XZ plane) - positioned at corner, not centered
+    const floorGrid = new THREE.GridHelper(gridSize * 2, gridDivisions * 2, gridColor, gridColorSecondary);
+    floorGrid.position.set(gridSize, 0, gridSize); // Shift so corner is at origin
+    scene.add(floorGrid);
+    
+    // Create wireframe walls for left (YZ plane at X=0) and back (XY plane at Z=0)
+    const wallMaterial = new THREE.LineBasicMaterial({ color: gridColor, transparent: true, opacity: 0.5 });
+    
+    // Left wall grid (YZ plane at X=0)
+    const leftWallPoints = [];
+    const wallHeight = 2.5; // 2.5 meters tall
+    const wallHeightDivisions = 5; // 50cm divisions
+    
+    // Vertical lines on left wall
+    for (let z = 0; z <= gridSize * 2; z += gridSize * 2 / gridDivisions) {
+      leftWallPoints.push(new THREE.Vector3(0, 0, z));
+      leftWallPoints.push(new THREE.Vector3(0, wallHeight, z));
+    }
+    // Horizontal lines on left wall
+    for (let y = 0; y <= wallHeight; y += wallHeight / wallHeightDivisions) {
+      leftWallPoints.push(new THREE.Vector3(0, y, 0));
+      leftWallPoints.push(new THREE.Vector3(0, y, gridSize * 2));
+    }
+    
+    const leftWallGeometry = new THREE.BufferGeometry().setFromPoints(leftWallPoints);
+    const leftWall = new THREE.LineSegments(leftWallGeometry, wallMaterial);
+    scene.add(leftWall);
+    
+    // Back wall grid (XY plane at Z=0)
+    const backWallPoints = [];
+    
+    // Vertical lines on back wall
+    for (let x = 0; x <= gridSize * 2; x += gridSize * 2 / gridDivisions) {
+      backWallPoints.push(new THREE.Vector3(x, 0, 0));
+      backWallPoints.push(new THREE.Vector3(x, wallHeight, 0));
+    }
+    // Horizontal lines on back wall
+    for (let y = 0; y <= wallHeight; y += wallHeight / wallHeightDivisions) {
+      backWallPoints.push(new THREE.Vector3(0, y, 0));
+      backWallPoints.push(new THREE.Vector3(gridSize * 2, y, 0));
+    }
+    
+    const backWallGeometry = new THREE.BufferGeometry().setFromPoints(backWallPoints);
+    const backWall = new THREE.LineSegments(backWallGeometry, wallMaterial);
+    scene.add(backWall);
+    
+    // Add axis lines at corner (thicker/colored)
+    const axisLength = 0.5;
+    const axisMaterialX = new THREE.LineBasicMaterial({ color: 0xff4444, linewidth: 2 }); // Red for X
+    const axisMaterialY = new THREE.LineBasicMaterial({ color: 0x44ff44, linewidth: 2 }); // Green for Y
+    const axisMaterialZ = new THREE.LineBasicMaterial({ color: 0x4444ff, linewidth: 2 }); // Blue for Z
+    
+    const xAxisGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(axisLength, 0, 0)
+    ]);
+    const yAxisGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, axisLength, 0)
+    ]);
+    const zAxisGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, axisLength)
+    ]);
+    
+    scene.add(new THREE.Line(xAxisGeo, axisMaterialX));
+    scene.add(new THREE.Line(yAxisGeo, axisMaterialY));
+    scene.add(new THREE.Line(zAxisGeo, axisMaterialZ));
 
     // Snap indicators (visual feedback for snap points)
     const snapIndicatorMeshes = [];
@@ -4205,62 +4387,47 @@ function Configurator({ project, onBack }) {
         posY = placementHeight + thicknessCm / 2;
       }
 
-      // Create material - use MeshBasicMaterial for flat shading (no light reaction)
+      // Create material - use triplanar shader for proper UV mapping with cutouts
       const hasTexture = colorData.texture && layoutInfo;
-      const material = new THREE.MeshBasicMaterial({ 
-        color: hasTexture ? 0xffffff : color, 
-      });
+      let material;
       
-      // Load texture if available and apply UV mapping based on layout
       if (hasTexture) {
+        // Load texture and create triplanar shader material
         const textureLoader = new THREE.TextureLoader();
+        const isBacksplash = el.type === 'backsplash';
+        const pieceW = el.length / 100;
+        const pieceH = isBacksplash ? el.height / 100 : el.depth / 100;
+        
+        // Create placeholder material first
+        material = new THREE.MeshBasicMaterial({ color: color });
+        
         textureLoader.load(colorData.texture, (texture) => {
-          // Use getTextureRegion for consistent UV mapping
-          const region = getTextureRegion(layoutInfo);
-          const { u0, u1, v0, v1, rotation } = region;
-          
-          // Check if piece exceeds tile dimensions
-          const exceedsTile = layoutInfo.pieceW > layoutInfo.tileW || layoutInfo.pieceH > layoutInfo.tileH;
-          
-          if (exceedsTile) {
-            // Use repeat wrapping for oversized pieces
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-            
-            const repeatX = layoutInfo.pieceW / layoutInfo.tileW;
-            const repeatY = layoutInfo.pieceH / layoutInfo.tileH;
-            
-            texture.repeat.set(repeatX, repeatY);
-            texture.offset.set(0, 0);
-          } else {
-            // Normal UV mapping using region bounds
-            texture.wrapS = THREE.ClampToEdgeWrapping;
-            texture.wrapT = THREE.ClampToEdgeWrapping;
-            
-            // Convert UV bounds to repeat/offset
-            // repeat = size of region, offset = start of region
-            const uScale = u1 - u0;
-            const vScale = v1 - v0;
-            
-            texture.repeat.set(uScale, vScale);
-            texture.offset.set(u0, v0);
-            
-            // Apply rotation if needed (for waterfall pieces)
-            if (rotation !== 0) {
-              texture.center.set(0.5, 0.5);
-              texture.rotation = rotation;
-            }
-          }
-          
-          // Enable anisotropic filtering to reduce moiré patterns
+          // Configure texture
+          texture.wrapS = THREE.ClampToEdgeWrapping;
+          texture.wrapT = THREE.ClampToEdgeWrapping;
           texture.anisotropy = rendererRef.current?.capabilities?.getMaxAnisotropy() || 4;
           texture.minFilter = THREE.LinearMipmapLinearFilter;
           texture.magFilter = THREE.LinearFilter;
           texture.generateMipmaps = true;
           
-          material.map = texture;
-          material.needsUpdate = true;
+          // Create triplanar material
+          const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color);
+          
+          // Update mesh center uniform based on actual position
+          if (triplanarMat.uniforms) {
+            triplanarMat.uniforms.uMeshCenter.value.set(
+              mesh.position.x,
+              mesh.position.y,
+              mesh.position.z
+            );
+          }
+          
+          // Replace material on mesh
+          mesh.material = triplanarMat;
+          mesh.material.needsUpdate = true;
         });
+      } else {
+        material = new THREE.MeshBasicMaterial({ color: color });
       }
       
       const mesh = new THREE.Mesh(geometry, material);
