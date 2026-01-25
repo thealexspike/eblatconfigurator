@@ -4761,6 +4761,7 @@ function Configurator({ project, onBack }) {
           }
           
           // Create box geometry for the waterfall
+          // Note: thicknessCm is already in meters (poorly named variable from parent scope)
           const waterfallGeo = new THREE.BoxGeometry(thicknessCm, waterfallHeightM, depthM);
           
           const mat = new THREE.MeshBasicMaterial({
@@ -4846,6 +4847,7 @@ function Configurator({ project, onBack }) {
           }
           
           const mesh = new THREE.Mesh(waterfallGeo, mat);
+          mesh.raycast = () => {}; // Disable raycast - selection works via parent slab mesh
           
           // Add outline when selected
           if (isSelectedElement) {
@@ -4859,6 +4861,7 @@ function Configurator({ project, onBack }) {
             });
             const outline = new THREE.LineSegments(edges, lineMat);
             outline.renderOrder = 998;
+            outline.raycast = () => {}; // Disable raycast on outline
             mesh.add(outline);
           }
           
