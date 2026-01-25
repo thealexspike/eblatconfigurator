@@ -2458,13 +2458,23 @@ function Configurator({ project, onBack }) {
       return el.position || { x: 0, z: 0 };
     }
     const group = groups[el.groupId];
+    const pivotX = group.position?.x || 0;
+    const pivotZ = group.position?.z || 0;
     const groupRot = (group.rotation || 0) * Math.PI / 180;
     const localX = el.localOffset?.x || 0;
     const localZ = el.localOffset?.z || 0;
-    // Rotate local offset by group rotation and add group position
+    
+    // Original world position (when group rotation was 0)
+    const origWorldX = pivotX + localX;
+    const origWorldZ = pivotZ + localZ;
+    
+    // Apply Delta rotation around pivot
+    const dx = origWorldX - pivotX;
+    const dz = origWorldZ - pivotZ;
+    
     return {
-      x: (group.position?.x || 0) + localX * Math.cos(groupRot) - localZ * Math.sin(groupRot),
-      z: (group.position?.z || 0) + localX * Math.sin(groupRot) + localZ * Math.cos(groupRot)
+      x: pivotX + dx * Math.cos(groupRot) - dz * Math.sin(groupRot),
+      z: pivotZ + dx * Math.sin(groupRot) + dz * Math.cos(groupRot)
     };
   };
   
@@ -2690,13 +2700,23 @@ function Configurator({ project, onBack }) {
     const getWorldPosDuringDrag = (el) => {
       if (el.groupId && groups[el.groupId]) {
         const pendingGroup = pendingGroupTransforms[el.groupId];
-        const groupPos = pendingGroup?.position || groups[el.groupId].position || { x: 0, z: 0 };
+        const pivotX = pendingGroup?.position?.x ?? groups[el.groupId].position?.x ?? 0;
+        const pivotZ = pendingGroup?.position?.z ?? groups[el.groupId].position?.z ?? 0;
         const groupRot = ((pendingGroup?.rotation ?? groups[el.groupId].rotation) || 0) * Math.PI / 180;
         const localX = el.localOffset?.x || 0;
         const localZ = el.localOffset?.z || 0;
+        
+        // Original world position (when group rotation was 0)
+        const origWorldX = pivotX + localX;
+        const origWorldZ = pivotZ + localZ;
+        
+        // Apply Delta rotation around pivot
+        const dx = origWorldX - pivotX;
+        const dz = origWorldZ - pivotZ;
+        
         return {
-          x: groupPos.x + localX * Math.cos(groupRot) - localZ * Math.sin(groupRot),
-          z: groupPos.z + localX * Math.sin(groupRot) + localZ * Math.cos(groupRot)
+          x: pivotX + dx * Math.cos(groupRot) - dz * Math.sin(groupRot),
+          z: pivotZ + dx * Math.sin(groupRot) + dz * Math.cos(groupRot)
         };
       }
       return pendingElementTransforms[el.id]?.position || el.position || { x: 0, z: 0 };
@@ -2945,10 +2965,10 @@ function Configurator({ project, onBack }) {
       isDraggingRef.current = true; // Prevent useEffect from overriding positions
       
       const selectedGroupId = getSelectedGroupId();
-      const angleDelta = dx * 0.5;
+      const angleDelta = dx * 0.5; // degrees per pixel
       
       if (selectedGroupId && groups[selectedGroupId]) {
-        // Rotating a group - just update group rotation
+        // Rotating a group using proper Delta * M_world approach
         const group = groups[selectedGroupId];
         const pending = pendingGroupTransforms[selectedGroupId] || { 
           position: { ...group.position }, 
@@ -2967,28 +2987,45 @@ function Configurator({ project, onBack }) {
         
         pendingGroupTransforms[selectedGroupId] = { ...pending, rotation: newRot };
         
-        const groupPos = pending.position;
-        const groupRotRad = newRot * Math.PI / 180;
+        // Get group center (pivot point in world space)
+        const pivotX = pending.position.x;
+        const pivotZ = pending.position.z;
+        const angleRad = newRot * Math.PI / 180;
         
-        // Update all group member meshes
+        // Update all group member meshes using proper world transform
         elements.filter(e => e.groupId === selectedGroupId).forEach(el => {
           const mesh = meshesRef.current[el.id];
           if (!mesh) return;
           
+          // Get the element's ORIGINAL world position (before any group rotation)
+          // This is: groupPos + localOffset (with no rotation applied)
           const localX = el.localOffset?.x || 0;
           const localZ = el.localOffset?.z || 0;
           const localRot = el.localRotation || 0;
           
-          // Calculate world position: rotate localOffset by group rotation
-          const cosR = Math.cos(groupRotRad);
-          const sinR = Math.sin(groupRotRad);
-          const worldX = groupPos.x + localX * cosR - localZ * sinR;
-          const worldZ = groupPos.z + localX * sinR + localZ * cosR;
-          const worldRot = localRot + newRot;
+          // Original world position (when group rotation was 0)
+          const origWorldX = pivotX + localX;
+          const origWorldZ = pivotZ + localZ;
           
-          mesh.position.x = worldX;
-          mesh.position.z = worldZ;
-          mesh.rotation.y = worldRot * Math.PI / 180;
+          // Apply Delta rotation around pivot:
+          // 1. Translate to pivot origin
+          // 2. Rotate
+          // 3. Translate back
+          const dx = origWorldX - pivotX;
+          const dz = origWorldZ - pivotZ;
+          
+          const cosR = Math.cos(angleRad);
+          const sinR = Math.sin(angleRad);
+          
+          const newWorldX = pivotX + dx * cosR - dz * sinR;
+          const newWorldZ = pivotZ + dx * sinR + dz * cosR;
+          
+          // Element's world rotation = its local rotation + group rotation
+          const newWorldRot = localRot + newRot;
+          
+          mesh.position.x = newWorldX;
+          mesh.position.z = newWorldZ;
+          mesh.rotation.y = newWorldRot * Math.PI / 180;
         });
         
       } else if (selectedIds.length === 1) {
