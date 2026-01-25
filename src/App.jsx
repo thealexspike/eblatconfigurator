@@ -4392,10 +4392,10 @@ function Configurator({ project, onBack }) {
       if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         
-        // Remove existing outlines (need to collect parent-child pairs)
+        // Remove existing outlines AND debug tile helpers
         const toRemove = [];
         mesh.traverse((child) => {
-          if (child.isLineSegments) {
+          if (child.isLineSegments || child.userData?.isDebugTileHelper) {
             toRemove.push({ parent: child.parent, child: child });
           }
         });
@@ -4403,7 +4403,10 @@ function Configurator({ project, onBack }) {
           if (parent) {
             parent.remove(child);
             if (child.geometry) child.geometry.dispose();
-            if (child.material) child.material.dispose();
+            if (child.material) {
+              if (child.material.map) child.material.map.dispose();
+              child.material.dispose();
+            }
           }
         });
         
@@ -4413,7 +4416,7 @@ function Configurator({ project, onBack }) {
           const groupColorData = getGroupColor(el.groupId);
           const outlineColor = groupColorData ? groupColorData.hex : 0xc9a962;
           mesh.traverse((child) => {
-            if (child.isMesh && child.geometry) {
+            if (child.isMesh && child.geometry && !child.userData?.isDebugTileHelper) {
               const edges = new THREE.EdgesGeometry(child.geometry, 15);
               const lineMaterial = new THREE.LineBasicMaterial({ 
                 color: outlineColor, 
@@ -4428,6 +4431,83 @@ function Configurator({ project, onBack }) {
               child.add(outline);
             }
           });
+          
+          // Add debug tile helper if debug mode is active
+          const isDebugActive = debugTexture && shouldHighlight;
+          const layoutInfo = layout[`${el.id}_main`];
+          const colorData = library.colors.find(c => c.id === el.material) || { color: '#666666' };
+          
+          if (isDebugActive && layoutInfo && colorData.texture) {
+            const tileW = layoutInfo.tileW / 100;
+            const tileH = layoutInfo.tileH / 100;
+            const pieceX = layoutInfo.x / 100;
+            const pieceY = layoutInfo.y / 100;
+            const pieceW = layoutInfo.pieceW / 100;
+            const pieceH = layoutInfo.pieceH / 100;
+            const isRotatedOnTile = layoutInfo.grainLengthwise === false;
+            const isBacksplash = el.type === 'backsplash';
+            
+            const tileCenterX = tileW / 2;
+            const tileCenterY = tileH / 2;
+            const pieceCenterOnTileX = pieceX + pieceW / 2;
+            const pieceCenterOnTileY = pieceY + pieceH / 2;
+            
+            let offsetPackerX = tileCenterX - pieceCenterOnTileX;
+            let offsetPackerY = tileCenterY - pieceCenterOnTileY;
+            
+            let offset3dX, offset3dZ;
+            if (isRotatedOnTile) {
+              offset3dX = -offsetPackerY;
+              offset3dZ = offsetPackerX;
+            } else {
+              offset3dX = offsetPackerX;
+              offset3dZ = offsetPackerY;
+            }
+            
+            let tileGeo;
+            if (isBacksplash) {
+              tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.001);
+            } else {
+              tileGeo = new THREE.BoxGeometry(tileW, 0.001, tileH);
+            }
+            
+            const fullTileLayoutInfo = {
+              x: 0, y: 0,
+              w: layoutInfo.tileW, h: layoutInfo.tileH,
+              pieceW: layoutInfo.tileW, pieceH: layoutInfo.tileH,
+              tileW: layoutInfo.tileW, tileH: layoutInfo.tileH,
+              grainLengthwise: true
+            };
+            
+            const color = new THREE.Color(colorData.color);
+            const tileMat = new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.5 });
+            const tileMesh = new THREE.Mesh(tileGeo, tileMat);
+            tileMesh.renderOrder = -1;
+            
+            if (isBacksplash) {
+              tileMesh.position.set(offset3dX, -offset3dZ, -0.002);
+            } else {
+              tileMesh.position.set(offset3dX, -0.002, offset3dZ);
+            }
+            
+            const textureLoader = new THREE.TextureLoader();
+            textureLoader.load(colorData.texture, (texture) => {
+              texture.wrapS = THREE.ClampToEdgeWrapping;
+              texture.wrapT = THREE.ClampToEdgeWrapping;
+              const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false, 0.5);
+              tileMesh.material.dispose();
+              tileMesh.material = tileTriplanarMat;
+            });
+            
+            const tileEdges = new THREE.EdgesGeometry(tileGeo);
+            const tileLineMat = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2, depthTest: false });
+            const tileOutline = new THREE.LineSegments(tileEdges, tileLineMat);
+            tileOutline.renderOrder = 999;
+            tileMesh.add(tileOutline);
+            
+            tileMesh.userData.isDebugTileHelper = true;
+            mesh.add(tileMesh);
+          }
         }
         
         // Update position/rotation too
@@ -4771,7 +4851,13 @@ function Configurator({ project, onBack }) {
           tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.001);
         } else {
           // Thin box for slab (width, thickness, depth)
-          tileGeo = new THREE.BoxGeometry(tileW, 0.001, tileH);
+          // When piece is rotated, the tile helper should also be rotated to match texture orientation
+          if (isRotatedOnTile) {
+            // Rotated: tile's X becomes 3D Z, tile's Y becomes 3D X
+            tileGeo = new THREE.BoxGeometry(tileH, 0.001, tileW);
+          } else {
+            tileGeo = new THREE.BoxGeometry(tileW, 0.001, tileH);
+          }
         }
         
         // Create layout info for the FULL TILE (offset 0, scale 1)
@@ -4784,7 +4870,7 @@ function Configurator({ project, onBack }) {
           pieceH: layoutInfo.tileH,
           tileW: layoutInfo.tileW,
           tileH: layoutInfo.tileH,
-          grainLengthwise: true  // No rotation for full tile
+          grainLengthwise: isRotatedOnTile ? false : true  // Match piece rotation
         };
         
         // Load texture and create material using same shader
