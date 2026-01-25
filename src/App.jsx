@@ -476,23 +476,40 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
         }
       } else if (uIsWaterfall) {
         // Waterfall: side face has local normal pointing in ±X direction
-        // Show texture on both +X and -X faces
+        // The waterfall is cut from the SAME tile as the slab, positioned adjacent
+        // 
+        // Packer layout (horizontal): pieceW = waterfallHeight (90), pieceH = depth (60)
+        // 3D geometry: BoxGeometry(thickness, height=90, depth=60)
+        //   - Local Y axis = height (90cm) = pieceW direction on tile
+        //   - Local Z axis = depth (60cm) = pieceH direction on tile
+        //
+        // For texture continuity with slab at the common edge:
+        // - Treat as if looking at the tile from above (like slab)
+        // - Then the texture "folds down" onto the waterfall face
+        //
+        // Mapping:
+        // - Local Y (0 to height) → tile X direction (pieceW)
+        // - Local Z (0 to depth) → tile Y direction (pieceH)
+        
         isMainFace = abs(vLocalNormal.x) > 0.5;
         
         if (isMainFace) {
-          // Project from X axis - Z is horizontal (depth), Y is vertical (height)
-          // Waterfall geometry: BoxGeometry(thickness, height, depth)
-          // So Y is height (vertical), Z is depth (horizontal)
-          uv.x = (vLocalPosition.z / uPieceSize.y) + 0.5;  // Z maps to horizontal (depth = pieceH in packer)
-          uv.y = (vLocalPosition.y / uPieceSize.x) + 0.5;  // Y maps to vertical (height = pieceW in packer)
+          // Map local Y to UV.x (horizontal on tile = pieceW = height)
+          // Map local Z to UV.y (vertical on tile = pieceH = depth)
+          uv.x = (vLocalPosition.y / uPieceSize.x) + 0.5;  // Y → pieceW direction
+          uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;  // Z → pieceH direction
           
-          // Flip for -X face to mirror correctly
+          // Flip Y to match packer's top-down coordinate system (same as slab)
+          uv.y = 1.0 - uv.y;
+          
+          // For -X face (interior side), mirror the texture
           if (vLocalNormal.x < 0.0) {
             uv.x = 1.0 - uv.x;
           }
           
-          // Note: waterfall layout has grainLengthwise=false (rotated), 
-          // and pieceW=height, pieceH=depth, so we need to handle rotation
+          // Waterfall is always rotated on tile (grainLengthwise=false)
+          // The rotation swap is already handled by how we map Y→x and Z→y
+          // But we still need the standard rotation transform if flagged
           if (uIsRotatedOnTile) {
             vec2 swapped = vec2(uv.y, 1.0 - uv.x);
             uv = swapped;
