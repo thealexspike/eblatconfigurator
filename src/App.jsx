@@ -2588,6 +2588,7 @@ function Configurator({ project, onBack }) {
   const pendingElementTransformsRef = useRef({});
   const rawPositionsRef = useRef({});
   const rawRotationsRef = useRef({});
+  const isDraggingRef = useRef(false); // Flag to prevent useEffect overriding positions during drag
 
   // Auto-save to Supabase (debounced)
   useEffect(() => {
@@ -2711,6 +2712,8 @@ function Configurator({ project, onBack }) {
     };
     
     window.moveElement = (id, delta) => {
+      isDraggingRef.current = true; // Prevent useEffect from overriding positions
+      
       const selectedGroupId = getSelectedGroupId();
       
       if (selectedGroupId && groups[selectedGroupId]) {
@@ -2939,6 +2942,8 @@ function Configurator({ project, onBack }) {
     };
     
     window.rotateElement = (id, dx) => {
+      isDraggingRef.current = true; // Prevent useEffect from overriding positions
+      
       const selectedGroupId = getSelectedGroupId();
       const angleDelta = dx * 0.5;
       
@@ -2980,15 +2985,6 @@ function Configurator({ project, onBack }) {
           const worldX = groupPos.x + localX * cosR - localZ * sinR;
           const worldZ = groupPos.z + localX * sinR + localZ * cosR;
           const worldRot = localRot + newRot;
-          
-          console.log('ROTATION CALC:', {
-            groupPos: { x: groupPos.x.toFixed(3), z: groupPos.z.toFixed(3) },
-            groupRotDeg: newRot,
-            localOffset: { x: localX.toFixed(3), z: localZ.toFixed(3) },
-            cosR: cosR.toFixed(3),
-            sinR: sinR.toFixed(3),
-            result: { x: worldX.toFixed(3), z: worldZ.toFixed(3) }
-          });
           
           mesh.position.x = worldX;
           mesh.position.z = worldZ;
@@ -3102,6 +3098,7 @@ function Configurator({ project, onBack }) {
       pendingElementTransformsRef.current = {};
       rawPositionsRef.current = {};
       rawRotationsRef.current = {};
+      isDraggingRef.current = false; // Allow useEffect to update positions again
     };
     
     return () => {
@@ -3662,13 +3659,16 @@ function Configurator({ project, onBack }) {
       const groupIdChanged = prevEl && (prevEl.groupId !== el.groupId);
       
       // If only position/rotation changed, just update the mesh transform
+      // But skip if we're dragging - the drag handlers update positions directly
       if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && meshesRef.current[el.id]) {
-        const mesh = meshesRef.current[el.id];
-        const worldPos = getWorldPosition(el);
-        const worldRot = getWorldRotation(el);
-        mesh.position.x = worldPos.x;
-        mesh.position.z = worldPos.z;
-        mesh.rotation.y = worldRot * Math.PI / 180;
+        if (!isDraggingRef.current) {
+          const mesh = meshesRef.current[el.id];
+          const worldPos = getWorldPosition(el);
+          const worldRot = getWorldRotation(el);
+          mesh.position.x = worldPos.x;
+          mesh.position.z = worldPos.z;
+          mesh.rotation.y = worldRot * Math.PI / 180;
+        }
         return;
       }
       
