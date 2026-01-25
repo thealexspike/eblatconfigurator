@@ -739,7 +739,8 @@ function createTileHelper(parentMesh, layoutInfo, colorData, isBacksplash, color
  * - Layout B (Linear): [LWF][SLAB][RWF] in a row  
  * - Layout C (Separate): Each piece individually
  */
-function computeLayout(elements, library) {
+function computeLayout(elements, library, fixedPieces = {}) {
+  // fixedPieces = { "elementId_key": { tileIndex, x, y, isManual } }
   const pieces = [];
   const tiles = [];
   const piecesByKey = {};
@@ -879,17 +880,180 @@ function computeLayout(elements, library) {
       exceeds: false
     });
     
-    // Helper: create new tile
-    const createTile = () => {
+    // Helper: create new tile with optional initial occupied spaces
+    const createTile = (occupiedRects = []) => {
       const idx = groupTiles.length;
+      // Start with full tile space
+      let spaces = [{ x: 0, y: 0, w: TW, h: TH }];
+      
+      // Subtract occupied rectangles (from fixed pieces)
+      occupiedRects.forEach(rect => {
+        const newSpaces = [];
+        spaces.forEach(sp => {
+          // Check if this space overlaps with the occupied rect
+          const overlapsX = sp.x < rect.x + rect.w && sp.x + sp.w > rect.x;
+          const overlapsY = sp.y < rect.y + rect.h && sp.y + sp.h > rect.y;
+          
+          if (overlapsX && overlapsY) {
+            // Subtract the occupied rect from this space
+            // Left remainder
+            if (sp.x < rect.x) {
+              newSpaces.push({ x: sp.x, y: sp.y, w: rect.x - sp.x, h: sp.h });
+            }
+            // Right remainder
+            if (sp.x + sp.w > rect.x + rect.w) {
+              newSpaces.push({ x: rect.x + rect.w, y: sp.y, w: (sp.x + sp.w) - (rect.x + rect.w), h: sp.h });
+            }
+            // Top remainder
+            if (sp.y < rect.y) {
+              newSpaces.push({ x: Math.max(sp.x, rect.x), y: sp.y, w: Math.min(sp.x + sp.w, rect.x + rect.w) - Math.max(sp.x, rect.x), h: rect.y - sp.y });
+            }
+            // Bottom remainder
+            if (sp.y + sp.h > rect.y + rect.h) {
+              newSpaces.push({ x: Math.max(sp.x, rect.x), y: rect.y + rect.h, w: Math.min(sp.x + sp.w, rect.x + rect.w) - Math.max(sp.x, rect.x), h: (sp.y + sp.h) - (rect.y + rect.h) });
+            }
+          } else {
+            // No overlap, keep the space
+            newSpaces.push(sp);
+          }
+        });
+        spaces = newSpaces;
+      });
+      
+      // Filter out invalid spaces (negative or zero dimensions)
+      spaces = spaces.filter(sp => sp.w > 0 && sp.h > 0);
+      
       groupTiles.push({ 
-        spaces: [{ x: 0, y: 0, w: TW, h: TH }],
+        spaces: spaces.length > 0 ? spaces : [],
         colorId,
         thickness,
         format
       });
       return idx;
     };
+    
+    // Get fixed pieces for this material group
+    const groupFixedPieces = Object.entries(fixedPieces).filter(([key, fp]) => {
+      // Find the piece info to check colorId and thickness
+      const [elementId] = key.split('_');
+      const el = elements.find(e => e.id === elementId);
+      if (!el) return false;
+      return el.material === colorId && (el.thickness || 12) === thickness && fp.isManual;
+    });
+    
+    // Pre-create tiles for fixed pieces and add them to pieces array
+    const fixedByTile = {};
+    groupFixedPieces.forEach(([key, fp]) => {
+      if (!fixedByTile[fp.tileIndex]) fixedByTile[fp.tileIndex] = [];
+      fixedByTile[fp.tileIndex].push({ key, ...fp });
+    });
+    
+    // Create tiles with fixed pieces as obstacles
+    const maxFixedTileIdx = Math.max(-1, ...Object.keys(fixedByTile).map(Number));
+    for (let i = 0; i <= maxFixedTileIdx; i++) {
+      const fixedOnTile = fixedByTile[i] || [];
+      const occupiedRects = fixedOnTile.map(fp => {
+        // Use saved dimensions if available
+        if (fp.pieceW !== undefined && fp.pieceH !== undefined) {
+          return { x: fp.x, y: fp.y, w: fp.pieceW, h: fp.pieceH };
+        }
+        
+        // Fallback: calculate from element
+        const [elementId, pieceKey] = fp.key.split('_');
+        const el = elements.find(e => e.id === elementId);
+        if (!el) return null;
+        
+        let pieceW, pieceH;
+        if (pieceKey === 'main') {
+          if (el.type === 'backsplash') {
+            pieceW = el.length;
+            pieceH = el.height;
+          } else {
+            pieceW = el.grainLengthwise !== false ? el.length : el.depth;
+            pieceH = el.grainLengthwise !== false ? el.depth : el.length;
+          }
+        } else {
+          // Waterfall piece
+          const waterfallH = el.waterfallHeight || el.placementHeight || 90;
+          pieceW = waterfallH; // rotated on tile
+          pieceH = el.depth;
+        }
+        
+        return { x: fp.x, y: fp.y, w: pieceW, h: pieceH };
+      }).filter(Boolean);
+      
+      createTile(occupiedRects);
+      
+      // Add fixed pieces to the pieces array
+      fixedOnTile.forEach(fp => {
+        const [elementId, pieceKey] = fp.key.split('_');
+        const el = elements.find(e => e.id === elementId);
+        if (!el) return;
+        
+        let pieceW, pieceH, pieceType, waterfallSide = null, slabGroup = null;
+        let rotated = false;
+        const grainLengthwise = el.grainLengthwise !== false;
+        
+        // Use saved dimensions if available (preserves rotation/grain state)
+        if (fp.pieceW !== undefined && fp.pieceH !== undefined) {
+          pieceW = fp.pieceW;
+          pieceH = fp.pieceH;
+          rotated = fp.rotated || false;
+        } else {
+          // Fallback: calculate from element
+          if (pieceKey === 'main') {
+            if (el.type === 'backsplash') {
+              pieceW = el.length;
+              pieceH = el.height;
+            } else {
+              pieceW = grainLengthwise ? el.length : el.depth;
+              pieceH = grainLengthwise ? el.depth : el.length;
+            }
+          } else {
+            const waterfallH = el.waterfallHeight || el.placementHeight || 90;
+            pieceW = waterfallH;
+            pieceH = el.depth;
+            rotated = true;
+          }
+        }
+        
+        if (pieceKey === 'main') {
+          pieceType = el.type === 'backsplash' ? 'backsplash' : 'slab';
+          if (el.type !== 'backsplash') slabGroup = `${el.id}_slab`;
+        } else {
+          pieceType = 'waterfall';
+          waterfallSide = pieceKey;
+          slabGroup = `${el.id}_slab`;
+        }
+        
+        const piece = {
+          elementId,
+          key: pieceKey,
+          name: el.name + (pieceKey === 'main' ? '' : pieceKey === 'left' ? ' - Stânga' : ' - Dreapta'),
+          pieceType,
+          colorId,
+          thickness,
+          grainLengthwise: pieceKey === 'main' ? grainLengthwise : false,
+          slabGroup,
+          waterfallSide,
+          // w and h are the "natural" dimensions, pieceW/pieceH are on-tile dimensions
+          w: pieceKey === 'main' ? (el.type === 'backsplash' ? el.length : el.length) : el.depth,
+          h: pieceKey === 'main' ? (el.type === 'backsplash' ? el.height : el.depth) : (el.waterfallHeight || el.placementHeight || 90),
+          pieceW,
+          pieceH,
+          x: fp.x,
+          y: fp.y,
+          tileIndex: tiles.length + i,
+          tileW: TW,
+          tileH: TH,
+          rotated,
+          exceeds: pieceW > TW || pieceH > TH,
+          isManual: true
+        };
+        pieces.push(piece);
+        piecesByKey[fp.key] = piece;
+      });
+    }
     
     // Helper: merge adjacent spaces into larger continuous rectangles
     // This allows pieces to fit in spaces that span multiple guillotine cuts
@@ -1129,6 +1293,17 @@ function computeLayout(elements, library) {
     
     sets.forEach(set => {
       const { slab, leftWf, rightWf } = set;
+      
+      // Skip if any part of this set is already fixed
+      const slabKey = `${slab.elementId}_${slab.key}`;
+      const leftKey = leftWf ? `${leftWf.elementId}_${leftWf.key}` : null;
+      const rightKey = rightWf ? `${rightWf.elementId}_${rightWf.key}` : null;
+      
+      if (fixedPieces[slabKey]?.isManual || 
+          (leftKey && fixedPieces[leftKey]?.isManual) || 
+          (rightKey && fixedPieces[rightKey]?.isManual)) {
+        return; // Skip - already placed as fixed
+      }
       
       // Slab dimensions (grainLengthwise: w on X, h on Y)
       const slabW = slab.grainLengthwise ? slab.w : slab.h;
@@ -1379,6 +1554,13 @@ function computeLayout(elements, library) {
     standalone.sort((a, b) => (b.w * b.h) - (a.w * a.h));
     
     standalone.forEach(p => {
+      const pieceKey = `${p.elementId}_${p.key}`;
+      
+      // Skip if this piece is already fixed
+      if (fixedPieces[pieceKey]?.isManual) {
+        return; // Skip - already placed as fixed
+      }
+      
       const pieceW = p.grainLengthwise ? p.w : p.h;
       const pieceH = p.grainLengthwise ? p.h : p.w;
       
@@ -1405,7 +1587,33 @@ function computeLayout(elements, library) {
     tiles.push(...groupTiles);
   });
   
-  return { pieces, tiles, piecesByKey };
+  // Filter out empty tiles and reindex pieces
+  const tilesWithPieces = [];
+  const tileIndexMap = {}; // old index -> new index
+  
+  tiles.forEach((tile, oldIdx) => {
+    const hasPieces = pieces.some(p => p.tileIndex === oldIdx);
+    if (hasPieces) {
+      tileIndexMap[oldIdx] = tilesWithPieces.length;
+      tilesWithPieces.push(tile);
+    }
+  });
+  
+  // Update piece tileIndex references
+  pieces.forEach(p => {
+    if (tileIndexMap[p.tileIndex] !== undefined) {
+      p.tileIndex = tileIndexMap[p.tileIndex];
+    }
+  });
+  
+  // Update piecesByKey as well
+  Object.values(piecesByKey).forEach(p => {
+    if (tileIndexMap[p.tileIndex] !== undefined) {
+      p.tileIndex = tileIndexMap[p.tileIndex];
+    }
+  });
+  
+  return { pieces, tiles: tilesWithPieces, piecesByKey };
 }
 
 /**
@@ -3144,6 +3352,69 @@ function Configurator({ project, onBack }) {
   const [texturePreviewVisible, setTexturePreviewVisible] = useState(false); // pentru animație fade
   const [materialWarnings, setMaterialWarnings] = useState([]); // Warnings for archived/missing materials
   const [debugTexture, setDebugTexture] = useState(false); // Debug mode: show full texture with transparency
+  const [manualLayoutPositions, setManualLayoutPositions] = useState(project?.manual_layout_positions || {}); // Manual piece positions from footer drag
+  const [forceRenderKey, setForceRenderKey] = useState(0); // Force re-render of all meshes
+  
+  // Force re-render of all textures on initial load
+  useEffect(() => {
+    // Small delay to ensure library is loaded
+    const timer = setTimeout(() => {
+      setForceRenderKey(prev => prev + 1);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+  
+  // Track previous element dimensions to detect changes and invalidate manual positions
+  const prevElementDimensionsRef = useRef({});
+  
+  useEffect(() => {
+    // Check if any element dimensions changed - if so, invalidate their manual positions
+    const keysToInvalidate = [];
+    
+    elements.forEach(el => {
+      const prev = prevElementDimensionsRef.current[el.id];
+      const current = {
+        length: el.length,
+        depth: el.depth,
+        height: el.height,
+        grainLengthwise: el.grainLengthwise,
+        waterfallLeft: el.waterfallLeft,
+        waterfallRight: el.waterfallRight,
+        waterfallHeight: el.waterfallHeight,
+      };
+      
+      if (prev && JSON.stringify(prev) !== JSON.stringify(current)) {
+        // Dimensions changed - invalidate manual positions for this element
+        keysToInvalidate.push(`${el.id}_main`);
+        keysToInvalidate.push(`${el.id}_left`);
+        keysToInvalidate.push(`${el.id}_right`);
+      }
+      
+      prevElementDimensionsRef.current[el.id] = current;
+    });
+    
+    // Clean up dimensions and manual positions for deleted elements
+    const currentElementIds = new Set(elements.map(el => el.id));
+    Object.keys(prevElementDimensionsRef.current).forEach(id => {
+      if (!currentElementIds.has(id)) {
+        delete prevElementDimensionsRef.current[id];
+        // Also invalidate manual positions for deleted elements
+        keysToInvalidate.push(`${id}_main`);
+        keysToInvalidate.push(`${id}_left`);
+        keysToInvalidate.push(`${id}_right`);
+      }
+    });
+    
+    if (keysToInvalidate.length > 0) {
+      setManualLayoutPositions(prev => {
+        const newPositions = { ...prev };
+        keysToInvalidate.forEach(key => {
+          delete newPositions[key];
+        });
+        return newPositions;
+      });
+    }
+  }, [elements]);
   
   // Helper for single selection (backward compatibility)
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
@@ -3247,7 +3518,7 @@ function Configurator({ project, onBack }) {
       // Only add to history if elements actually changed
       if (JSON.stringify(prev) !== JSON.stringify(nextElements)) {
         setUndoHistory(history => {
-          const newHistory = [...history, prev];
+          const newHistory = [...history, { elements: prev, manualLayoutPositions }];
           // Limit history size
           if (newHistory.length > MAX_UNDO_HISTORY) {
             return newHistory.slice(-MAX_UNDO_HISTORY);
@@ -3257,7 +3528,18 @@ function Configurator({ project, onBack }) {
       }
       return nextElements;
     });
-  }, []);
+  }, [manualLayoutPositions]);
+  
+  // Function to save manual layout positions to undo history
+  const pushManualLayoutToHistory = useCallback(() => {
+    setUndoHistory(history => {
+      const newHistory = [...history, { elements, manualLayoutPositions }];
+      if (newHistory.length > MAX_UNDO_HISTORY) {
+        return newHistory.slice(-MAX_UNDO_HISTORY);
+      }
+      return newHistory;
+    });
+  }, [elements, manualLayoutPositions]);
   
   // Undo function
   const undo = useCallback(() => {
@@ -3265,7 +3547,18 @@ function Configurator({ project, onBack }) {
     
     const previousState = undoHistory[undoHistory.length - 1];
     setUndoHistory(history => history.slice(0, -1));
-    setElementsInternal(previousState);
+    
+    // Handle both old format (just elements array) and new format (object with elements and manualLayoutPositions)
+    if (Array.isArray(previousState)) {
+      // Old format - just elements
+      setElementsInternal(previousState);
+    } else {
+      // New format - object with elements and manualLayoutPositions
+      setElementsInternal(previousState.elements);
+      if (previousState.manualLayoutPositions !== undefined) {
+        setManualLayoutPositions(previousState.manualLayoutPositions);
+      }
+    }
     setSelectedId(null);
   }, [undoHistory]);
   
@@ -3313,26 +3606,40 @@ function Configurator({ project, onBack }) {
       setSaveStatus('saving');
       
       try {
-        // Try saving with groups first
+        // Try saving with all fields first
         let { error } = await supabase
           .from('projects')
           .update({ 
             elements,
             groups,
+            manual_layout_positions: manualLayoutPositions,
             updated_at: new Date().toISOString() 
           })
           .eq('id', project.id);
         
-        // If groups column doesn't exist, save without it
-        if (error?.code === 'PGRST204') {
+        // If new columns don't exist, try without them
+        if (error?.code === 'PGRST204' || error?.message?.includes('manual_layout_positions')) {
           const result = await supabase
             .from('projects')
             .update({ 
               elements,
+              groups,
               updated_at: new Date().toISOString() 
             })
             .eq('id', project.id);
           error = result.error;
+          
+          // If groups also doesn't exist
+          if (error?.code === 'PGRST204') {
+            const result2 = await supabase
+              .from('projects')
+              .update({ 
+                elements,
+                updated_at: new Date().toISOString() 
+              })
+              .eq('id', project.id);
+            error = result2.error;
+          }
         }
         
         if (error) throw error;
@@ -3340,7 +3647,13 @@ function Configurator({ project, onBack }) {
       } catch (err) {
         console.error('Error saving project:', err);
         // Fallback to localStorage
-        const updatedProject = { ...project, elements, groups, updated_at: new Date().toISOString() };
+        const updatedProject = { 
+          ...project, 
+          elements, 
+          groups, 
+          manual_layout_positions: manualLayoutPositions,
+          updated_at: new Date().toISOString() 
+        };
         const projects = loadProjects(user.id);
         const updated = projects.map(p => p.id === project.id ? updatedProject : p);
         saveProjects(user.id, updated);
@@ -3355,7 +3668,7 @@ function Configurator({ project, onBack }) {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [elements, groups, project, user]);
+  }, [elements, groups, manualLayoutPositions, project, user]);
 
   // Expose functions to window for 3D interaction
   useEffect(() => {
@@ -4466,11 +4779,28 @@ function Configurator({ project, onBack }) {
   }, [tool, selectedIds, elements, groups]);
 
   // Use the shared computeLayout function for texture UV mapping
-  const layoutData = useMemo(() => computeLayout(elements, library), [elements, library]);
+  const layoutData = useMemo(() => computeLayout(elements, library, manualLayoutPositions), [elements, library, manualLayoutPositions]);
+  
+  // pieceLayout for 3D UV mapping - computeLayout already includes fixed positions
   const pieceLayout = layoutData.piecesByKey;
 
   // Track previous element properties to detect what changed
   const prevElementsRef = useRef({});
+  const prevLayoutRef = useRef({}); // Track previous layout for UV changes
+  const prevForceRenderKeyRef = useRef(0); // Track force render key
+  
+  // Helper to get layout hash for an element (for detecting UV changes)
+  const getLayoutHash = (elId) => {
+    const keys = Object.keys(pieceLayout).filter(k => k.startsWith(elId));
+    const layoutData = {};
+    keys.forEach(k => {
+      const p = pieceLayout[k];
+      if (p) {
+        layoutData[k] = { x: p.x, y: p.y, tileIndex: p.tileIndex };
+      }
+    });
+    return JSON.stringify(layoutData);
+  };
   
   // Helper to get geometry-affecting properties (excluding position/rotation)
   const getGeometryHash = (el) => {
@@ -4493,6 +4823,13 @@ function Configurator({ project, onBack }) {
   // Update 3D meshes when elements change
   useEffect(() => {
     if (!sceneRef.current) return;
+
+    // Check if force render was triggered - reset prev refs to force full rebuild
+    if (forceRenderKey !== prevForceRenderKeyRef.current) {
+      prevElementsRef.current = {};
+      prevLayoutRef.current = {};
+      prevForceRenderKeyRef.current = forceRenderKey;
+    }
 
     // Clean up scene-level debug tile helpers from previous render
     const sceneHelpersToRemove = [];
@@ -4550,9 +4887,14 @@ function Configurator({ project, onBack }) {
       // Check if debugTexture mode changed (affects material shader)
       const debugModeChanged = prevDebugTextureRef.current !== debugTexture;
       
+      // Check if layout changed (affects UV mapping)
+      const currentLayoutHash = getLayoutHash(el.id);
+      const prevLayoutHash = prevLayoutRef.current[el.id];
+      const layoutChanged = prevLayoutHash !== undefined && prevLayoutHash !== currentLayoutHash;
+      
       // If only position/rotation changed, just update the mesh transform
       // But skip if we're dragging - the drag handlers update positions directly
-      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && !debugModeChanged && meshesRef.current[el.id]) {
+      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && !debugModeChanged && !layoutChanged && meshesRef.current[el.id]) {
         if (!isDraggingRef.current) {
           const mesh = meshesRef.current[el.id];
           const worldPos = getWorldPosition(el);
@@ -4891,12 +5233,15 @@ function Configurator({ project, onBack }) {
       const isDirectlySelected = selectedIds.includes(el.id);
       const isGroupSelected = el.groupId && elements.some(e => e.groupId === el.groupId && selectedIds.includes(e.id));
       newPrevElements[el.id] = { ...el, _wasSelected: isDirectlySelected || isGroupSelected };
+      
+      // Update layout hash for next comparison
+      prevLayoutRef.current[el.id] = getLayoutHash(el.id);
     });
     prevElementsRef.current = newPrevElements;
     
     // Update debug texture ref for next comparison
     prevDebugTextureRef.current = debugTexture;
-  }, [elements, selectedIds, library, pieceLayout, groups, debugTexture]);
+  }, [elements, selectedIds, library, pieceLayout, groups, debugTexture, forceRenderKey]);
 
   // Helper functions
   const getColorById = (id) => library.colors.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
@@ -5167,9 +5512,23 @@ function Configurator({ project, onBack }) {
 
   // Clipboard for copy/paste
   const [clipboard, setClipboard] = useState(null);
+  const [notification, setNotification] = useState(null); // { message, type: 'success' | 'error', fading: boolean }
   
-  const copySelected = () => {
-    if (selectedIds.length === 0) return;
+  const showNotification = useCallback((message, type = 'success') => {
+    setNotification({ message, type, fading: false });
+    // Start fade out after 2 seconds
+    setTimeout(() => {
+      setNotification(prev => prev ? { ...prev, fading: true } : null);
+    }, 2000);
+    // Remove after fade completes (500ms fade)
+    setTimeout(() => setNotification(null), 2500);
+  }, []);
+  
+  const copySelected = useCallback(() => {
+    if (selectedIds.length === 0) {
+      showNotification('Nimic selectat', 'error');
+      return;
+    }
     
     // Copy all selected elements with their world transforms
     const copied = elements
@@ -5185,10 +5544,14 @@ function Configurator({ project, onBack }) {
       }));
     
     setClipboard(copied);
-  };
+    showNotification(`Copiat ${copied.length} element${copied.length > 1 ? 'e' : ''}`, 'success');
+  }, [selectedIds, elements, getWorldPosition, getWorldRotation, showNotification]);
   
-  const pasteClipboard = () => {
-    if (!clipboard || clipboard.length === 0) return;
+  const pasteClipboard = useCallback(() => {
+    if (!clipboard || clipboard.length === 0) {
+      showNotification('Clipboard gol', 'error');
+      return;
+    }
     
     const newElements = clipboard.map(el => ({
       ...el,
@@ -5204,7 +5567,8 @@ function Configurator({ project, onBack }) {
     
     setElements([...elements, ...newElements]);
     setSelectedIds(newElements.map(el => el.id));
-  };
+    showNotification(`Lipit ${newElements.length} element${newElements.length > 1 ? 'e' : ''}`, 'success');
+  }, [clipboard, elements, showNotification]);
 
   const selected = elements.find(el => el.id === selectedId);
   const selectedColor = selected ? getColorById(selected.material) : null;
@@ -5272,7 +5636,7 @@ function Configurator({ project, onBack }) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, snapEnabled, elements]);
+  }, [selectedIds, snapEnabled, elements, copySelected, pasteClipboard]);
 
   const toolBtnStyle = (active) => ({
     padding: '6px 12px',
@@ -5485,6 +5849,30 @@ function Configurator({ project, onBack }) {
         {/* Center - 3D View */}
         <div style={{ flex: 1, position: 'relative', background: '#111', minWidth: 0 }}>
           <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+          
+          {/* Copy/Paste Notification */}
+          {notification && (
+            <div style={{ 
+              position: 'absolute', 
+              top: '12px', 
+              left: '12px', 
+              background: notification.type === 'success' ? 'rgba(74,153,74,0.95)' : 'rgba(201,98,98,0.95)', 
+              color: '#fff', 
+              padding: '8px 16px', 
+              borderRadius: '6px',
+              fontSize: '12px',
+              fontWeight: 500,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+              zIndex: 100,
+              pointerEvents: 'none',
+              opacity: notification.fading ? 0 : 1,
+              transform: notification.fading ? 'translateY(-10px)' : 'translateY(0)',
+              transition: 'opacity 0.5s ease-out, transform 0.5s ease-out',
+            }}>
+              {notification.type === 'success' ? '✓' : '✗'} {notification.message}
+            </div>
+          )}
+          
           {elements.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555', pointerEvents: 'none' }}>
               Adaugă un element pentru a începe
@@ -6304,6 +6692,9 @@ function Configurator({ project, onBack }) {
         project={project}
         user={user}
         canvasRef={canvasRef}
+        manualLayoutPositions={manualLayoutPositions}
+        setManualLayoutPositions={setManualLayoutPositions}
+        pushManualLayoutToHistory={pushManualLayoutToHistory}
       />
     </div>
   );
@@ -6313,10 +6704,24 @@ function Configurator({ project, onBack }) {
 // SLAB CALCULATOR FOOTER COMPONENT
 // ============================================
 
-function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, canvasRef }) {
+function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory }) {
   const [sendingQuote, setSendingQuote] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState(null); // 'success' | 'error' | null
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [footerZoom, setFooterZoom] = useState(false); // Footer zoom x2
+  
+  // Drag state (local - only for visual feedback during drag)
+  const [draggingPiece, setDraggingPiece] = useState(null); // { piece, startX, startY, originalX, originalY, tileIdx }
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 }); // Current drag offset in pixels
+  const [pendingDrag, setPendingDrag] = useState(null); // For delay before drag starts
+  const [snapIndicators, setSnapIndicators] = useState([]); // [{ tileIdx, x, y, type: 'horizontal'|'vertical' }]
+  const dragTimerRef = useRef(null);
+  const tileRefsMap = useRef({}); // Map of tileIdx -> DOM element for drop detection
+  
+  // Use props for manual positions (shared with 3D)
+  const manualPositions = manualLayoutPositions;
+  const setManualPositions = setManualLayoutPositions;
+  
   const footerRef = useRef(null);
   const tilesAreaRef = useRef(null);
   
@@ -6335,13 +6740,443 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
   const getFormatById = (formatId) => library.formats.find(f => f.id === formatId);
   
   // Use the shared computeLayout function - SINGLE SOURCE OF TRUTH
-  const { pieces: rawPieces, tiles } = useMemo(() => computeLayout(elements, library), [elements, library]);
+  const { pieces: rawPieces, tiles } = useMemo(() => computeLayout(elements, library, manualPositions), [elements, library, manualPositions]);
   
   // Add sequential numbering to pieces (01, 02, 03, ...)
   const pieces = rawPieces.map((p, idx) => ({
     ...p,
     pieceNumber: String(idx + 1).padStart(2, '0'),
   }));
+  
+  // Calculate uniform scale for drag calculations
+  const maxTileWidth = Math.max(...tiles.map(t => t.format?.width || 160), 160);
+  const baseScale = 100 / maxTileWidth;
+  const uniformScale = baseScale * (footerZoom ? 2 : 1);
+  
+  // Add isManual flag for visual indicator (dashed border)
+  // pieces already have correct positions from computeLayout
+  const piecesWithManualPositions = useMemo(() => pieces.map(p => {
+    const pieceKey = `${p.elementId}_${p.key}`;
+    const manual = manualPositions[pieceKey];
+    if (manual?.isManual) {
+      return { ...p, isManual: true };
+    }
+    return p;
+  }), [pieces, manualPositions]);
+  
+  // Check collision between two rectangles
+  const checkCollision = (rect1, rect2) => {
+    return !(rect1.x + rect1.w <= rect2.x || 
+             rect2.x + rect2.w <= rect1.x || 
+             rect1.y + rect1.h <= rect2.y || 
+             rect2.y + rect2.h <= rect1.y);
+  };
+  
+  // Drag handlers
+  const handleMouseDown = (e, piece, tileIdx) => {
+    e.preventDefault();
+    
+    // Store pending drag info
+    const pending = {
+      piece,
+      tileIdx,
+      startMouseX: e.clientX,
+      startMouseY: e.clientY,
+      originalX: piece.x,
+      originalY: piece.y,
+    };
+    setPendingDrag(pending);
+    
+    // Start timer - drag begins after 150ms hold
+    dragTimerRef.current = setTimeout(() => {
+      // Save current state to undo history before starting drag
+      if (pushManualLayoutToHistory) {
+        pushManualLayoutToHistory();
+      }
+      setDraggingPiece(pending);
+      setDragOffset({ x: 0, y: 0 });
+      setPendingDrag(null);
+    }, 150);
+  };
+  
+  const handleMouseUp = (e, piece) => {
+    // If timer hasn't fired yet, this is a click (select)
+    if (pendingDrag && !draggingPiece) {
+      clearTimeout(dragTimerRef.current);
+      setPendingDrag(null);
+      handleElementSelect(piece.elementId, { ctrlKey: e.ctrlKey || e.metaKey, shiftKey: e.shiftKey });
+      return;
+    }
+  };
+  
+  const handleDragMove = useCallback((e) => {
+    if (!draggingPiece) return;
+    
+    const dx = e.clientX - draggingPiece.startMouseX;
+    const dy = e.clientY - draggingPiece.startMouseY;
+    setDragOffset({ x: dx, y: dy });
+    
+    // Calculate snap indicators
+    const { piece, tileIdx: originalTileIdx } = draggingPiece;
+    const originalTile = tiles[originalTileIdx];
+    const snapThreshold = 15; // cm - increased for better UX
+    
+    // Detect which tile the mouse is currently over
+    let targetTileIdx = originalTileIdx;
+    let targetTile = originalTile;
+    
+    for (const [idxStr, tileEl] of Object.entries(tileRefsMap.current)) {
+      if (!tileEl) continue;
+      const rect = tileEl.getBoundingClientRect();
+      if (e.clientX >= rect.left && e.clientX <= rect.right &&
+          e.clientY >= rect.top && e.clientY <= rect.bottom) {
+        const idx = parseInt(idxStr);
+        const potentialTile = tiles[idx];
+        // Check if tile is compatible (same colorId and thickness)
+        if (potentialTile && 
+            potentialTile.colorId === originalTile.colorId && 
+            potentialTile.thickness === originalTile.thickness) {
+          targetTileIdx = idx;
+          targetTile = potentialTile;
+        }
+        break;
+      }
+    }
+    
+    const format = targetTile?.format || { length: 320, width: 160 };
+    
+    // Calculate current position relative to target tile
+    let currentX, currentY;
+    
+    if (targetTileIdx === originalTileIdx) {
+      // Same tile - use drag offset
+      currentX = draggingPiece.originalX + dx / uniformScale;
+      currentY = draggingPiece.originalY + dy / uniformScale;
+    } else {
+      // Different tile - calculate position relative to target tile
+      const targetEl = tileRefsMap.current[targetTileIdx];
+      if (targetEl) {
+        const rect = targetEl.getBoundingClientRect();
+        currentX = (e.clientX - rect.left) / uniformScale - piece.pieceW / 2;
+        currentY = (e.clientY - rect.top) / uniformScale - piece.pieceH / 2;
+      } else {
+        currentX = 0;
+        currentY = 0;
+      }
+    }
+    
+    // Get other pieces on TARGET tile (not original)
+    const otherPieces = piecesWithManualPositions.filter(p => 
+      p.tileIndex === targetTileIdx && 
+      !(p.elementId === piece.elementId && p.key === piece.key)
+    );
+    
+    const indicators = [];
+    
+    // Check snap to other pieces on target tile
+    otherPieces.forEach(other => {
+      // Right edge of dragged -> Left edge of other
+      if (Math.abs(currentX + piece.pieceW - other.x) < snapThreshold) {
+        indicators.push({ tileIdx: targetTileIdx, x: other.x, y1: Math.min(currentY, other.y), y2: Math.max(currentY + piece.pieceH, other.y + other.pieceH), type: 'vertical' });
+      }
+      // Left edge of dragged -> Right edge of other
+      if (Math.abs(currentX - (other.x + other.pieceW)) < snapThreshold) {
+        indicators.push({ tileIdx: targetTileIdx, x: other.x + other.pieceW, y1: Math.min(currentY, other.y), y2: Math.max(currentY + piece.pieceH, other.y + other.pieceH), type: 'vertical' });
+      }
+      // Bottom edge of dragged -> Top edge of other
+      if (Math.abs(currentY + piece.pieceH - other.y) < snapThreshold) {
+        indicators.push({ tileIdx: targetTileIdx, y: other.y, x1: Math.min(currentX, other.x), x2: Math.max(currentX + piece.pieceW, other.x + other.pieceW), type: 'horizontal' });
+      }
+      // Top edge of dragged -> Bottom edge of other
+      if (Math.abs(currentY - (other.y + other.pieceH)) < snapThreshold) {
+        indicators.push({ tileIdx: targetTileIdx, y: other.y + other.pieceH, x1: Math.min(currentX, other.x), x2: Math.max(currentX + piece.pieceW, other.x + other.pieceW), type: 'horizontal' });
+      }
+    });
+    
+    // Check snap to target tile edges
+    if (Math.abs(currentX) < snapThreshold) {
+      indicators.push({ tileIdx: targetTileIdx, x: 0, y1: 0, y2: format.width, type: 'vertical' });
+    }
+    if (Math.abs(currentY) < snapThreshold) {
+      indicators.push({ tileIdx: targetTileIdx, y: 0, x1: 0, x2: format.length, type: 'horizontal' });
+    }
+    if (Math.abs(currentX + piece.pieceW - format.length) < snapThreshold) {
+      indicators.push({ tileIdx: targetTileIdx, x: format.length, y1: 0, y2: format.width, type: 'vertical' });
+    }
+    if (Math.abs(currentY + piece.pieceH - format.width) < snapThreshold) {
+      indicators.push({ tileIdx: targetTileIdx, y: format.width, x1: 0, x2: format.length, type: 'horizontal' });
+    }
+    
+    // If no piece snap found on current tile, check neighbor tiles for alignment guides
+    const hasPieceSnap = indicators.some(ind => ind.type === 'horizontal' && ind.y !== 0 && ind.y !== format.width);
+    
+    if (!hasPieceSnap) {
+      // Find compatible neighbor tiles (same colorId and thickness)
+      const compatibleTiles = tiles
+        .map((t, idx) => ({ ...t, idx }))
+        .filter(t => t.colorId === targetTile.colorId && t.thickness === targetTile.thickness && t.idx !== targetTileIdx);
+      
+      // Check pieces on neighbor tiles for Y alignment (horizontal guides)
+      compatibleTiles.forEach(neighborTile => {
+        const neighborPieces = piecesWithManualPositions.filter(p => p.tileIndex === neighborTile.idx);
+        
+        neighborPieces.forEach(other => {
+          // Align top edge with neighbor piece top
+          if (Math.abs(currentY - other.y) < snapThreshold) {
+            indicators.push({ 
+              tileIdx: targetTileIdx, 
+              y: other.y, 
+              x1: 0, 
+              x2: format.length, 
+              type: 'horizontal',
+              isNeighbor: true // Mark as neighbor reference
+            });
+            // Also show on neighbor tile
+            indicators.push({ 
+              tileIdx: neighborTile.idx, 
+              y: other.y, 
+              x1: 0, 
+              x2: neighborTile.format?.length || 320, 
+              type: 'horizontal',
+              isNeighbor: true
+            });
+          }
+          // Align bottom edge with neighbor piece bottom
+          if (Math.abs(currentY + piece.pieceH - (other.y + other.pieceH)) < snapThreshold) {
+            indicators.push({ 
+              tileIdx: targetTileIdx, 
+              y: other.y + other.pieceH - piece.pieceH + piece.pieceH, // bottom edge Y
+              x1: 0, 
+              x2: format.length, 
+              type: 'horizontal',
+              isNeighbor: true
+            });
+            indicators.push({ 
+              tileIdx: neighborTile.idx, 
+              y: other.y + other.pieceH, 
+              x1: 0, 
+              x2: neighborTile.format?.length || 320, 
+              type: 'horizontal',
+              isNeighbor: true
+            });
+          }
+          // Align top edge with neighbor piece bottom
+          if (Math.abs(currentY - (other.y + other.pieceH)) < snapThreshold) {
+            indicators.push({ 
+              tileIdx: targetTileIdx, 
+              y: other.y + other.pieceH, 
+              x1: 0, 
+              x2: format.length, 
+              type: 'horizontal',
+              isNeighbor: true
+            });
+            indicators.push({ 
+              tileIdx: neighborTile.idx, 
+              y: other.y + other.pieceH, 
+              x1: 0, 
+              x2: neighborTile.format?.length || 320, 
+              type: 'horizontal',
+              isNeighbor: true
+            });
+          }
+        });
+      });
+    }
+    
+    setSnapIndicators(indicators);
+  }, [draggingPiece, tiles, uniformScale, piecesWithManualPositions]);
+  
+  const handleDragEnd = useCallback((e) => {
+    // Clear any pending timer
+    if (dragTimerRef.current) {
+      clearTimeout(dragTimerRef.current);
+    }
+    setPendingDrag(null);
+    
+    if (!draggingPiece) return;
+    
+    const { piece, tileIdx: originalTileIdx } = draggingPiece;
+    const originalTile = tiles[originalTileIdx];
+    
+    // Detect which tile the mouse is over
+    let targetTileIdx = originalTileIdx;
+    let targetTile = originalTile;
+    
+    // Check all tiles to find which one the mouse is over
+    for (const [idxStr, tileEl] of Object.entries(tileRefsMap.current)) {
+      if (!tileEl) continue;
+      const rect = tileEl.getBoundingClientRect();
+      if (e.clientX >= rect.left && e.clientX <= rect.right &&
+          e.clientY >= rect.top && e.clientY <= rect.bottom) {
+        const idx = parseInt(idxStr);
+        const potentialTile = tiles[idx];
+        // Check if tile is compatible (same colorId and thickness)
+        if (potentialTile && 
+            potentialTile.colorId === originalTile.colorId && 
+            potentialTile.thickness === originalTile.thickness) {
+          targetTileIdx = idx;
+          targetTile = potentialTile;
+        }
+        break;
+      }
+    }
+    
+    const format = targetTile?.format || { length: 320, width: 160 };
+    
+    // Calculate new position in cm
+    // If dropped on same tile, use drag offset
+    // If dropped on different tile, calculate position relative to new tile
+    let newX, newY;
+    
+    if (targetTileIdx === originalTileIdx) {
+      const dx = dragOffset.x / uniformScale;
+      const dy = dragOffset.y / uniformScale;
+      newX = draggingPiece.originalX + dx;
+      newY = draggingPiece.originalY + dy;
+    } else {
+      // Dropped on different tile - calculate position relative to target tile
+      const targetEl = tileRefsMap.current[targetTileIdx];
+      if (targetEl) {
+        const rect = targetEl.getBoundingClientRect();
+        newX = (e.clientX - rect.left) / uniformScale - piece.pieceW / 2;
+        newY = (e.clientY - rect.top) / uniformScale - piece.pieceH / 2;
+      } else {
+        newX = 0;
+        newY = 0;
+      }
+    }
+    
+    // Snap threshold in cm (increased for better UX)
+    const snapThreshold = 15;
+    
+    // Get other pieces on target tile (with their current positions)
+    const otherPieces = piecesWithManualPositions.filter(p => 
+      p.tileIndex === targetTileIdx && 
+      !(p.elementId === piece.elementId && p.key === piece.key)
+    );
+    
+    // Helper function to check if a position is valid (no collision, within bounds)
+    const isValidPosition = (x, y) => {
+      if (x < 0 || y < 0 || x + piece.pieceW > format.length || y + piece.pieceH > format.width) {
+        return false;
+      }
+      const testRect = { x, y, w: piece.pieceW, h: piece.pieceH };
+      for (const other of otherPieces) {
+        const otherRect = { x: other.x, y: other.y, w: other.pieceW, h: other.pieceH };
+        if (checkCollision(testRect, otherRect)) {
+          return false;
+        }
+      }
+      return true;
+    };
+    
+    // Helper function to find best snap position
+    const findBestPosition = (proposedX, proposedY) => {
+      // Clamp proposed position to bounds first
+      let clampedX = Math.max(0, Math.min(proposedX, format.length - piece.pieceW));
+      let clampedY = Math.max(0, Math.min(proposedY, format.width - piece.pieceH));
+      
+      // 1. Try snapping to edges and pieces
+      let snappedX = clampedX;
+      let snappedY = clampedY;
+      
+      // Snap to tile edges
+      if (Math.abs(snappedX) < snapThreshold) snappedX = 0;
+      if (Math.abs(snappedY) < snapThreshold) snappedY = 0;
+      if (Math.abs(snappedX + piece.pieceW - format.length) < snapThreshold) snappedX = format.length - piece.pieceW;
+      if (Math.abs(snappedY + piece.pieceH - format.width) < snapThreshold) snappedY = format.width - piece.pieceH;
+      
+      // Snap to other pieces
+      otherPieces.forEach(other => {
+        // Snap right edge of dragged piece to left edge of other
+        if (Math.abs(snappedX + piece.pieceW - other.x) < snapThreshold) snappedX = other.x - piece.pieceW;
+        // Snap left edge of dragged piece to right edge of other
+        if (Math.abs(snappedX - (other.x + other.pieceW)) < snapThreshold) snappedX = other.x + other.pieceW;
+        // Snap bottom edge of dragged piece to top edge of other
+        if (Math.abs(snappedY + piece.pieceH - other.y) < snapThreshold) snappedY = other.y - piece.pieceH;
+        // Snap top edge of dragged piece to bottom edge of other
+        if (Math.abs(snappedY - (other.y + other.pieceH)) < snapThreshold) snappedY = other.y + other.pieceH;
+      });
+      
+      // Clamp snapped position to bounds
+      snappedX = Math.max(0, Math.min(snappedX, format.length - piece.pieceW));
+      snappedY = Math.max(0, Math.min(snappedY, format.width - piece.pieceH));
+      
+      // Round to nearest cm
+      snappedX = Math.round(snappedX);
+      snappedY = Math.round(snappedY);
+      
+      // If snapped position is valid, use it
+      if (isValidPosition(snappedX, snappedY)) {
+        return { x: snappedX, y: snappedY };
+      }
+      
+      // 2. Fallback: scan from top-left
+      for (let y = 0; y <= format.width - piece.pieceH; y += 5) {
+        for (let x = 0; x <= format.length - piece.pieceW; x += 5) {
+          if (isValidPosition(x, y)) {
+            return { x, y };
+          }
+        }
+      }
+      
+      return null; // No valid position found
+    };
+    
+    // Find best position
+    const bestPosition = findBestPosition(newX, newY);
+    
+    if (!bestPosition) {
+      // No valid position found - revert
+      setDraggingPiece(null);
+      setDragOffset({ x: 0, y: 0 });
+      setSnapIndicators([]); // Clear snap indicators
+      return;
+    }
+    
+    newX = bestPosition.x;
+    newY = bestPosition.y;
+    
+    // Save the new position with piece dimensions (to preserve rotation/grain)
+    const pieceKey = `${piece.elementId}_${piece.key}`;
+    setManualPositions(prev => ({
+      ...prev,
+      [pieceKey]: { 
+        tileIndex: targetTileIdx, 
+        x: newX, 
+        y: newY, 
+        pieceW: piece.pieceW,
+        pieceH: piece.pieceH,
+        rotated: piece.rotated,
+        isManual: true 
+      }
+    }));
+    
+    setDraggingPiece(null);
+    setDragOffset({ x: 0, y: 0 });
+    setSnapIndicators([]); // Clear snap indicators
+  }, [draggingPiece, dragOffset, uniformScale, tiles, piecesWithManualPositions, setManualPositions]);
+  
+  // Global mouse event listeners for drag
+  useEffect(() => {
+    if (draggingPiece) {
+      window.addEventListener('mousemove', handleDragMove);
+      window.addEventListener('mouseup', handleDragEnd);
+      return () => {
+        window.removeEventListener('mousemove', handleDragMove);
+        window.removeEventListener('mouseup', handleDragEnd);
+      };
+    }
+  }, [draggingPiece, handleDragMove, handleDragEnd]);
+  
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (dragTimerRef.current) {
+        clearTimeout(dragTimerRef.current);
+      }
+    };
+  }, []);
   
   // Early return AFTER hooks
   if (elements.length === 0) return null;
@@ -6384,11 +7219,6 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
   const backsplashAtypical = backsplashPieces.filter(p => p.pieceH > 70);
   const backsplashStandardLength = backsplashStandard.reduce((sum, p) => sum + p.pieceW, 0) / 100;
   const backsplashAtypicalLength = backsplashAtypical.reduce((sum, p) => sum + p.pieceW, 0) / 100;
-  
-  // Calculate uniform scale for display
-  const maxTileLength = Math.max(...tiles.map(t => t.format?.length || 320), 320);
-  const maxTileWidth = Math.max(...tiles.map(t => t.format?.width || 160), 160);
-  const uniformScale = 100 / maxTileWidth;
   
   // Group tiles by material type for display
   const tilesByMaterial = {};
@@ -6683,8 +7513,8 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                   const tileWpx = format.length * uniformScale;
                   const tileHpx = format.width * uniformScale;
                   
-                  // Get pieces for this tile
-                  const tilePieces = pieces.filter(p => p.tileIndex === tileIdx);
+                  // Get pieces for this tile (using manual positions if set)
+                  const tilePieces = piecesWithManualPositions.filter(p => p.tileIndex === tileIdx);
                   
                   // Calculate efficiency (used area / total area * 100)
                   const tileArea = format.length * format.width;
@@ -6711,19 +7541,22 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                       </div>
                       
                       {/* Tile with texture - NO cover/center, exact mapping */}
-                      <div style={{ 
-                        width: tileWpx, 
-                        height: tileHpx, 
-                        backgroundImage: colorData.texture ? `url(${colorData.texture})` : 'none',
-                        backgroundColor: colorData.texture ? 'transparent' : colorData.color,
-                        backgroundSize: `${tileWpx}px ${tileHpx}px`,
-                        backgroundPosition: '0 0',
-                        backgroundRepeat: 'no-repeat',
-                        border: '1px solid #555', 
-                        position: 'relative', 
-                        borderRadius: '2px',
-                        overflow: 'hidden',
-                      }}>
+                      <div 
+                        ref={el => { tileRefsMap.current[tileIdx] = el; }}
+                        style={{ 
+                          width: tileWpx, 
+                          height: tileHpx, 
+                          backgroundImage: colorData.texture ? `url(${colorData.texture})` : 'none',
+                          backgroundColor: colorData.texture ? 'transparent' : colorData.color,
+                          backgroundSize: `${tileWpx}px ${tileHpx}px`,
+                          backgroundPosition: '0 0',
+                          backgroundRepeat: 'no-repeat',
+                          border: draggingPiece && tiles[draggingPiece.tileIdx]?.colorId === tile.colorId && tiles[draggingPiece.tileIdx]?.thickness === tile.thickness ? '2px dashed #c9a962' : '1px solid #555', 
+                          position: 'relative', 
+                          borderRadius: '2px',
+                          overflow: 'visible',
+                        }}
+                      >
                         {/* Tile number in background */}
                         <span style={{ 
                           position: 'absolute', 
@@ -6736,6 +7569,42 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                           pointerEvents: 'none',
                           zIndex: 0,
                         }}>{tileIdx + 1}</span>
+                        
+                        {/* Snap indicators */}
+                        {snapIndicators.filter(ind => ind.tileIdx === tileIdx).map((ind, i) => {
+                          const color = ind.isNeighbor ? '#4a9fff' : '#00ff88'; // Blue for neighbor, green for local
+                          return ind.type === 'vertical' ? (
+                            <div
+                              key={`snap-${i}`}
+                              style={{
+                                position: 'absolute',
+                                left: ind.x * uniformScale - 1,
+                                top: ind.y1 * uniformScale,
+                                width: 2,
+                                height: (ind.y2 - ind.y1) * uniformScale,
+                                backgroundColor: color,
+                                boxShadow: `0 0 4px ${color}`,
+                                pointerEvents: 'none',
+                                zIndex: 200,
+                              }}
+                            />
+                          ) : (
+                            <div
+                              key={`snap-${i}`}
+                              style={{
+                                position: 'absolute',
+                                left: ind.x1 * uniformScale,
+                                top: ind.y * uniformScale - 1,
+                                width: (ind.x2 - ind.x1) * uniformScale,
+                                height: 2,
+                                backgroundColor: color,
+                                boxShadow: `0 0 4px ${color}`,
+                                pointerEvents: 'none',
+                                zIndex: 200,
+                              }}
+                            />
+                          );
+                        })}
                         
                         {/* Pieces on this tile - each piece shows its portion of the texture */}
                         {tilePieces.map((p, j) => {
@@ -6795,14 +7664,29 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                             boxShadowColor = 'none';
                           }
                           
+                          // Check if this piece is being dragged
+                          const isDragging = draggingPiece && 
+                            draggingPiece.piece.elementId === p.elementId && 
+                            draggingPiece.piece.key === p.key;
+                          
+                          // Check if pending drag on this piece
+                          const isPendingDrag = pendingDrag && 
+                            pendingDrag.piece.elementId === p.elementId && 
+                            pendingDrag.piece.key === p.key;
+                          
+                          // Calculate display position (with drag offset if dragging)
+                          const displayLeft = isDragging ? pieceLeftPx + dragOffset.x : pieceLeftPx;
+                          const displayTop = isDragging ? pieceTopPx + dragOffset.y : pieceTopPx;
+                          
                           return (
                             <div 
                               key={j} 
-                              onClick={(e) => handleElementSelect(p.elementId, { ctrlKey: e.ctrlKey || e.metaKey, shiftKey: e.shiftKey })}
+                              onMouseDown={(e) => handleMouseDown(e, p, tileIdx)}
+                              onMouseUp={(e) => handleMouseUp(e, p)}
                               style={{
                                 position: 'absolute', 
-                                left: pieceLeftPx, 
-                                top: pieceTopPx,
+                                left: displayLeft, 
+                                top: displayTop,
                                 width: pieceWpx, 
                                 height: pieceHpx,
                                 // Show the exact portion of texture for this piece
@@ -6812,10 +7696,13 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                 backgroundRepeat: 'no-repeat',
                                 overflow: 'hidden',
                                 boxSizing: 'border-box',
-                                cursor: 'pointer',
-                                zIndex: exceeds ? 11 : (shouldHighlight ? 10 : 1),
+                                cursor: isDragging ? 'grabbing' : (isPendingDrag ? 'grabbing' : 'grab'),
+                                zIndex: isDragging ? 100 : (exceeds ? 11 : (shouldHighlight ? 10 : 1)),
+                                opacity: isDragging ? 0.8 : 1,
+                                outline: p.isManual ? '2px dashed #c9a962' : 'none',
+                                outlineOffset: '-2px',
                               }}
-                              title={`${p.name}: ${p.pieceW}×${p.pieceH}cm${exceeds ? ' ⚠️ DEPĂȘEȘTE!' : ''}${isLeftWaterfall ? ' (Cascadă Stânga)' : ''}${isRightWaterfall ? ' (Cascadă Dreapta)' : ''}`}
+                              title={`${p.name}: ${p.pieceW}×${p.pieceH}cm${exceeds ? ' ⚠️ DEPĂȘEȘTE!' : ''}${isLeftWaterfall ? ' (Cascadă Stânga)' : ''}${isRightWaterfall ? ' (Cascadă Dreapta)' : ''}${p.isManual ? ' (Poziție manuală)' : ''}`}
                             >
                               {/* Semi-transparent overlay for selection/status */}
                               <div style={{
@@ -6994,27 +7881,100 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
         </div>
       </div>
 
-      {/* CTA Button */}
+      {/* CTA Buttons */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-        <button 
-          onClick={() => setShowConfirmDialog(true)}
-          disabled={sendingQuote || hasCutoutErrors}
-          style={{ 
-            padding: '14px 28px', 
-            background: (sendingQuote || hasCutoutErrors) ? '#1a1a1a' : 'transparent', 
-            border: `1px solid ${hasCutoutErrors ? '#c96262' : '#c9a962'}`,
-            color: hasCutoutErrors ? '#c96262' : '#c9a962', 
-            fontWeight: 600, 
-            cursor: (sendingQuote || hasCutoutErrors) ? 'not-allowed' : 'pointer',
-            flexShrink: 0,
-            fontSize: '13px',
-            opacity: (sendingQuote || hasCutoutErrors) ? 0.7 : 1,
-            transition: 'all 0.2s ease',
-          }}
-          title={hasCutoutErrors ? 'Corectează erorile la decupaje înainte de a trimite oferta' : ''}
-        >
-          {sendingQuote ? '⏳ Se trimite...' : (hasCutoutErrors ? '⛔ Erori decupaje' : 'Solicită Ofertă')}
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {/* Reset Selected - only show if there are selected pieces with manual positions */}
+          {(() => {
+            const selectedManualKeys = Object.keys(manualPositions).filter(key => {
+              const [elementId] = key.split('_');
+              return selectedIds.includes(elementId);
+            });
+            return selectedManualKeys.length > 0 && (
+              <button
+                onClick={() => {
+                  setManualPositions(prev => {
+                    const newPositions = { ...prev };
+                    selectedManualKeys.forEach(key => delete newPositions[key]);
+                    return newPositions;
+                  });
+                }}
+                style={{
+                  padding: '14px 16px',
+                  background: 'transparent',
+                  border: '1px solid #c9a962',
+                  color: '#c9a962',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  transition: 'all 0.2s ease',
+                }}
+                title="Resetează pozițiile pieselor selectate"
+              >
+                ↺ Reset Sel.
+              </button>
+            );
+          })()}
+          
+          {/* Reset All Manual Positions Button - only show if there are manual positions */}
+          {Object.keys(manualPositions).length > 0 && (
+            <button
+              onClick={() => setManualPositions({})}
+              style={{
+                padding: '14px 16px',
+                background: 'transparent',
+                border: '1px solid #c96262',
+                color: '#c96262',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: 600,
+                transition: 'all 0.2s ease',
+              }}
+              title="Resetează toate pozițiile manuale"
+            >
+              ↺ Reset All
+            </button>
+          )}
+          
+          {/* Zoom Toggle Button */}
+          <button
+            onClick={() => setFooterZoom(!footerZoom)}
+            style={{
+              padding: '14px 28px',
+              background: 'transparent',
+              border: `1px solid ${footerZoom ? '#c9a962' : '#555'}`,
+              color: footerZoom ? '#c9a962' : '#888',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: 600,
+              transition: 'all 0.2s ease',
+            }}
+            title={footerZoom ? 'Micșorează layout' : 'Mărește layout'}
+          >
+            {footerZoom ? '⊖ Micșorează' : '⊕ Mărește'}
+          </button>
+          
+          {/* Solicita Oferta Button */}
+          <button 
+            onClick={() => setShowConfirmDialog(true)}
+            disabled={sendingQuote || hasCutoutErrors}
+            style={{ 
+              padding: '14px 28px', 
+              background: (sendingQuote || hasCutoutErrors) ? '#1a1a1a' : 'transparent', 
+              border: `1px solid ${hasCutoutErrors ? '#c96262' : '#c9a962'}`,
+              color: hasCutoutErrors ? '#c96262' : '#c9a962', 
+              fontWeight: 600, 
+              cursor: (sendingQuote || hasCutoutErrors) ? 'not-allowed' : 'pointer',
+              flexShrink: 0,
+              fontSize: '13px',
+              opacity: (sendingQuote || hasCutoutErrors) ? 0.7 : 1,
+              transition: 'all 0.2s ease',
+            }}
+            title={hasCutoutErrors ? 'Corectează erorile la decupaje înainte de a trimite oferta' : ''}
+          >
+            {sendingQuote ? '⏳ Se trimite...' : (hasCutoutErrors ? '⛔ Erori decupaje' : 'Solicită Ofertă')}
+          </button>
+        </div>
         {hasCutoutErrors && (
           <div style={{ fontSize: '10px', color: '#c96262', textAlign: 'center', maxWidth: '150px' }}>
             Corectează {cutoutErrors.length} eroare{cutoutErrors.length > 1 ? '' : ''} la decupaje
