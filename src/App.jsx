@@ -20,15 +20,522 @@ const hslToHex = (h, s, l) => {
 };
 
 // Get consistent color for a group (used in sidebar, footer, and 3D)
+// Avoids red hues (0-30 and 330-360) as red is reserved for error states
 const getGroupColor = (groupId) => {
   if (!groupId) return null;
-  const hue = parseInt(groupId, 36) % 360;
+  let hue = parseInt(groupId, 36) % 300; // 0-299
+  hue = hue + 30; // Shift to 30-329, avoiding red (0-30 and 330-360)
   return {
     hsl: `hsl(${hue}, 60%, 50%)`,
     hex: hslToHex(hue, 60, 50),
     hue
   };
 };
+
+// ============================================
+// CUTOUT (DECUPAJE) PRESETS & FUNCTIONS
+// ============================================
+
+const CUTOUT_PRESETS = {
+  // BLAT ONLY
+  'sink-single':     { type: 'rectangle', width: 50, height: 40, cornerRadius: 5, name: 'Chiuvetă simplă', icon: '🚰', forTypes: ['island'] },
+  'sink-double':     { type: 'rectangle', width: 80, height: 45, cornerRadius: 5, name: 'Chiuvetă dublă', icon: '🚰', forTypes: ['island'] },
+  'sink-round':      { type: 'circle', radius: 22, name: 'Chiuvetă rotundă', icon: '🚰', forTypes: ['island'] },
+  'tap-32':          { type: 'circle', radius: 1.6, name: 'Baterie Ø32mm', icon: '🚿', forTypes: ['island'] },
+  'hob-60':          { type: 'rectangle', width: 56, height: 49, cornerRadius: 3, name: 'Plită 60cm', icon: '🔥', forTypes: ['island'] },
+  'hob-70':          { type: 'rectangle', width: 65, height: 49, cornerRadius: 3, name: 'Plită 70cm', icon: '🔥', forTypes: ['island'] },
+  'hob-80':          { type: 'rectangle', width: 75, height: 49, cornerRadius: 3, name: 'Plită 80cm', icon: '🔥', forTypes: ['island'] },
+  'hob-90':          { type: 'rectangle', width: 85, height: 49, cornerRadius: 3, name: 'Plită 90cm', icon: '🔥', forTypes: ['island'] },
+  
+  // BLAT + CONTRABLAT
+  'outlet-single':   { type: 'rectangle', width: 8, height: 8, cornerRadius: 1, name: 'Priză simplă', icon: '🔌', forTypes: ['island', 'backsplash'] },
+  'outlet-double':   { type: 'rectangle', width: 15, height: 8, cornerRadius: 1, name: 'Priză dublă', icon: '🔌', forTypes: ['island', 'backsplash'] },
+  'outlet-triple':   { type: 'rectangle', width: 22, height: 8, cornerRadius: 1, name: 'Priză triplă', icon: '🔌', forTypes: ['island', 'backsplash'] },
+  'hole-3':          { type: 'circle', radius: 1.5, name: 'Gaură Ø3cm', icon: '⭕', forTypes: ['island', 'backsplash'] },
+  'hole-5':          { type: 'circle', radius: 2.5, name: 'Gaură Ø5cm', icon: '⭕', forTypes: ['island', 'backsplash'] },
+  'hole-8':          { type: 'circle', radius: 4, name: 'Gaură Ø8cm', icon: '⭕', forTypes: ['island', 'backsplash'] },
+  'custom-rect':     { type: 'rectangle', width: 20, height: 20, cornerRadius: 0, name: 'Dreptunghi custom', icon: '⬜', forTypes: ['island', 'backsplash'] },
+  'custom-circle':   { type: 'circle', radius: 10, name: 'Cerc custom', icon: '⭕', forTypes: ['island', 'backsplash'] },
+};
+
+// Transform user input (cota de la stânga/față) to internal center coordinates
+// Pentru DREPTUNGHI: cota e până la colțul stânga-față
+// Pentru CERC: cota e până la centru (ax)
+function cutoutUserInputToCenter(cotaStanga, cotaFata, cutout, pieceLength, pieceDepth) {
+  if (cutout.type === 'circle') {
+    // Cerc: cota e direct la centru
+    return {
+      x: cotaStanga - pieceLength / 2,
+      z: cotaFata - pieceDepth / 2
+    };
+  } else {
+    // Dreptunghi: cota e la colțul stânga-față, centrul = colț + jumătate dimensiuni
+    const centerFromOriginX = cotaStanga + (cutout.width || 0) / 2;
+    const centerFromOriginZ = cotaFata + (cutout.height || 0) / 2;
+    return {
+      x: centerFromOriginX - pieceLength / 2,
+      z: centerFromOriginZ - pieceDepth / 2
+    };
+  }
+}
+
+// Transform internal center to user-friendly input values
+function cutoutCenterToUserInput(cutout, pieceLength, pieceDepth) {
+  const centerFromOriginX = cutout.center.x + pieceLength / 2;
+  const centerFromOriginZ = cutout.center.z + pieceDepth / 2;
+  
+  if (cutout.type === 'circle') {
+    // Cerc: returnăm direct centrul
+    return {
+      cotaStanga: centerFromOriginX,
+      cotaFata: centerFromOriginZ
+    };
+  } else {
+    // Dreptunghi: returnăm colțul stânga-față
+    return {
+      cotaStanga: centerFromOriginX - (cutout.width || 0) / 2,
+      cotaFata: centerFromOriginZ - (cutout.height || 0) / 2
+    };
+  }
+}
+
+// Get bounding box of cutout in piece-local coordinates (cm)
+function getCutoutBoundingBox(cutout) {
+  if (cutout.type === 'circle') {
+    const r = cutout.radius || 0;
+    return {
+      left: cutout.center.x - r,
+      right: cutout.center.x + r,
+      front: cutout.center.z - r,
+      back: cutout.center.z + r,
+      width: r * 2,
+      height: r * 2
+    };
+  }
+  const w = cutout.width || 0;
+  const h = cutout.height || 0;
+  return {
+    left: cutout.center.x - w / 2,
+    right: cutout.center.x + w / 2,
+    front: cutout.center.z - h / 2,
+    back: cutout.center.z + h / 2,
+    width: w,
+    height: h
+  };
+}
+
+// Calculate distances from cutout to piece edges
+function getCutoutEdgeDistances(cutout, pieceLength, pieceDepth) {
+  const bbox = getCutoutBoundingBox(cutout);
+  return {
+    stanga: pieceLength / 2 + bbox.left,
+    dreapta: pieceLength / 2 - bbox.right,
+    fata: pieceDepth / 2 + bbox.front,
+    spate: pieceDepth / 2 - bbox.back
+  };
+}
+
+// Check if two cutouts overlap
+function checkCutoutsOverlap(a, b) {
+  // Circle vs Circle
+  if (a.type === 'circle' && b.type === 'circle') {
+    const dx = a.center.x - b.center.x;
+    const dz = a.center.z - b.center.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    const minDist = (a.radius || 0) + (b.radius || 0);
+    return {
+      overlaps: dist < minDist,
+      distance: dist - minDist
+    };
+  }
+  
+  // Circle vs Rectangle
+  if (a.type === 'circle' || b.type === 'circle') {
+    const circle = a.type === 'circle' ? a : b;
+    const rect = a.type === 'circle' ? b : a;
+    const bboxRect = getCutoutBoundingBox(rect);
+    
+    // Find closest point on rect to circle center
+    const closestX = Math.max(bboxRect.left, Math.min(circle.center.x, bboxRect.right));
+    const closestZ = Math.max(bboxRect.front, Math.min(circle.center.z, bboxRect.back));
+    
+    const dx = circle.center.x - closestX;
+    const dz = circle.center.z - closestZ;
+    const distToEdge = Math.sqrt(dx * dx + dz * dz);
+    
+    return {
+      overlaps: distToEdge < (circle.radius || 0),
+      distance: distToEdge - (circle.radius || 0)
+    };
+  }
+  
+  // Rectangle vs Rectangle (AABB)
+  const bboxA = getCutoutBoundingBox(a);
+  const bboxB = getCutoutBoundingBox(b);
+  
+  const overlapX = Math.max(0, Math.min(bboxA.right, bboxB.right) - Math.max(bboxA.left, bboxB.left));
+  const overlapZ = Math.max(0, Math.min(bboxA.back, bboxB.back) - Math.max(bboxA.front, bboxB.front));
+  
+  if (overlapX > 0 && overlapZ > 0) {
+    return { overlaps: true, distance: -Math.min(overlapX, overlapZ) };
+  }
+  
+  const gapX = Math.max(bboxA.left - bboxB.right, bboxB.left - bboxA.right, 0);
+  const gapZ = Math.max(bboxA.front - bboxB.back, bboxB.front - bboxA.back, 0);
+  const distance = Math.sqrt(gapX * gapX + gapZ * gapZ);
+  
+  return { overlaps: false, distance };
+}
+
+// Validate a cutout against piece dimensions and other cutouts
+function validateCutout(cutout, pieceLength, pieceDepth, allCutouts) {
+  const errors = [];
+  const warnings = [];
+  const MIN_EDGE = 5; // cm
+  const MIN_BETWEEN = 5; // cm
+  
+  const edges = getCutoutEdgeDistances(cutout, pieceLength, pieceDepth);
+  
+  // ERRORS: Cutout outside piece
+  if (edges.stanga < 0) errors.push('Decupajul iese din marginea stângă');
+  if (edges.dreapta < 0) errors.push('Decupajul iese din marginea dreaptă');
+  if (edges.fata < 0) errors.push('Decupajul iese din marginea din față');
+  if (edges.spate < 0) errors.push('Decupajul iese din marginea din spate');
+  
+  // WARNINGS: Too close to edge
+  if (edges.stanga >= 0 && edges.stanga < MIN_EDGE) 
+    warnings.push(`Distanță ${edges.stanga.toFixed(1)}cm de stânga (min: ${MIN_EDGE}cm)`);
+  if (edges.dreapta >= 0 && edges.dreapta < MIN_EDGE) 
+    warnings.push(`Distanță ${edges.dreapta.toFixed(1)}cm de dreapta (min: ${MIN_EDGE}cm)`);
+  if (edges.fata >= 0 && edges.fata < MIN_EDGE) 
+    warnings.push(`Distanță ${edges.fata.toFixed(1)}cm de față (min: ${MIN_EDGE}cm)`);
+  if (edges.spate >= 0 && edges.spate < MIN_EDGE) 
+    warnings.push(`Distanță ${edges.spate.toFixed(1)}cm de spate (min: ${MIN_EDGE}cm)`);
+  
+  // ERRORS: Overlap with other cutouts
+  // WARNINGS: Too close to other cutouts
+  allCutouts.forEach(other => {
+    if (other.id === cutout.id) return;
+    const overlap = checkCutoutsOverlap(cutout, other);
+    if (overlap.overlaps) {
+      errors.push(`Suprapunere cu "${other.name}"`);
+    } else if (overlap.distance < MIN_BETWEEN) {
+      warnings.push(`Distanță ${overlap.distance.toFixed(1)}cm de "${other.name}" (min: ${MIN_BETWEEN}cm)`);
+    }
+  });
+  
+  // ERRORS: Invalid dimensions
+  if (cutout.type === 'circle') {
+    if (!cutout.radius || cutout.radius < 0.5) errors.push('Raza minimă este 0.5cm');
+  } else {
+    if (!cutout.width || cutout.width < 1) errors.push('Lățimea minimă este 1cm');
+    if (!cutout.height || cutout.height < 1) errors.push('Lungimea minimă este 1cm');
+  }
+  
+  return { valid: errors.length === 0, errors, warnings, edges };
+}
+
+// Create a new cutout from preset, positioned at piece center
+function createCutoutFromPreset(presetId, pieceLength, pieceDepth) {
+  const preset = CUTOUT_PRESETS[presetId];
+  if (!preset) return null;
+  
+  // Default position: center of piece (for user: length/2, depth/2)
+  // Internal center: (0, 0)
+  const cutout = {
+    id: Math.random().toString(36).substr(2, 9),
+    type: preset.type,
+    center: { x: 0, z: 0 },
+    width: preset.width || null,
+    height: preset.height || null,
+    radius: preset.radius || null,
+    cornerRadius: preset.cornerRadius || 0,
+    name: preset.name,
+    preset: presetId
+  };
+  
+  return cutout;
+}
+
+/**
+ * Creates a THREE.js geometry for a slab/backsplash with cutouts
+ * Uses Shape + ExtrudeGeometry for pieces with cutouts, BoxGeometry for simple pieces
+ * 
+ * @param {number} widthCm - Width in cm (length of piece)
+ * @param {number} heightCm - Height in cm (depth for blat, height for backsplash)
+ * @param {number} thicknessMm - Thickness in mm
+ * @param {Array} cutouts - Array of cutout objects
+ * @param {boolean} isBacksplash - If true, geometry is vertical (Y-up), else horizontal (Y=thickness)
+ * @returns {THREE.BufferGeometry}
+ */
+function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [], isBacksplash = false) {
+  const width = widthCm / 100;   // meters
+  const height = heightCm / 100; // meters
+  const thickness = thicknessMm / 1000; // meters
+  
+  // If no cutouts, use simple BoxGeometry
+  if (!cutouts || cutouts.length === 0) {
+    if (isBacksplash) {
+      return new THREE.BoxGeometry(width, height, thickness);
+    } else {
+      return new THREE.BoxGeometry(width, thickness, height);
+    }
+  }
+  
+  // Create main shape (rectangle centered at origin)
+  const shape = new THREE.Shape();
+  const halfW = width / 2;
+  const halfH = height / 2;
+  
+  // Main rectangle path (counter-clockwise)
+  shape.moveTo(-halfW, -halfH);
+  shape.lineTo(halfW, -halfH);
+  shape.lineTo(halfW, halfH);
+  shape.lineTo(-halfW, halfH);
+  shape.lineTo(-halfW, -halfH);
+  
+  // Add cutouts as holes
+  cutouts.forEach(cutout => {
+    const hole = new THREE.Path();
+    
+    // Convert center from cm to meters
+    const cx = cutout.center.x / 100;
+    const cz = cutout.center.z / 100;
+    
+    if (cutout.type === 'circle') {
+      const r = (cutout.radius || 0) / 100;
+      // Circle hole (clockwise for hole)
+      const segments = 32;
+      for (let i = 0; i <= segments; i++) {
+        const angle = (i / segments) * Math.PI * 2;
+        const x = cx + r * Math.cos(angle);
+        const y = cz + r * Math.sin(angle);
+        if (i === 0) {
+          hole.moveTo(x, y);
+        } else {
+          hole.lineTo(x, y);
+        }
+      }
+    } else {
+      // Rectangle hole (with optional corner radius)
+      const w = (cutout.width || 0) / 100 / 2;
+      const h = (cutout.height || 0) / 100 / 2;
+      const r = Math.min((cutout.cornerRadius || 0) / 100, w, h);
+      
+      if (r > 0.001) {
+        // Rounded rectangle (clockwise for hole)
+        hole.moveTo(cx - w + r, cz - h);
+        hole.lineTo(cx + w - r, cz - h);
+        hole.quadraticCurveTo(cx + w, cz - h, cx + w, cz - h + r);
+        hole.lineTo(cx + w, cz + h - r);
+        hole.quadraticCurveTo(cx + w, cz + h, cx + w - r, cz + h);
+        hole.lineTo(cx - w + r, cz + h);
+        hole.quadraticCurveTo(cx - w, cz + h, cx - w, cz + h - r);
+        hole.lineTo(cx - w, cz - h + r);
+        hole.quadraticCurveTo(cx - w, cz - h, cx - w + r, cz - h);
+      } else {
+        // Simple rectangle (clockwise for hole)
+        hole.moveTo(cx - w, cz - h);
+        hole.lineTo(cx + w, cz - h);
+        hole.lineTo(cx + w, cz + h);
+        hole.lineTo(cx - w, cz + h);
+        hole.lineTo(cx - w, cz - h);
+      }
+    }
+    
+    shape.holes.push(hole);
+  });
+  
+  // Extrude the shape
+  const extrudeSettings = {
+    depth: thickness,
+    bevelEnabled: false
+  };
+  
+  const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+  
+  // Rotate and position geometry based on orientation
+  if (isBacksplash) {
+    // Backsplash: vertical panel
+    // ExtrudeGeometry creates on XY plane extruded on Z
+    // We need XY plane (width, height) with Z = thickness
+    // Actually this is correct, just center it
+    geometry.translate(0, 0, -thickness / 2);
+  } else {
+    // Slab: horizontal panel
+    // We need XZ plane (width, depth) with Y = thickness
+    // Rotate 90° on X axis to lay flat
+    geometry.rotateX(-Math.PI / 2);
+    geometry.translate(0, thickness / 2, 0);
+  }
+  
+  return geometry;
+}
+
+/**
+ * Creates a triplanar shader material for proper texture mapping
+ * Uses LOCAL coordinates so texture stays fixed when piece is rotated/moved
+ * Handles grainLengthwise rotation (90° UV rotation when piece is rotated on tile)
+ * Applies texture only on top/front face, solid color on sides
+ * 
+ * @param {THREE.Texture} texture - The texture to apply
+ * @param {Object} layoutInfo - Layout info with tile/piece positions
+ * @param {boolean} isBacksplash - If true, project from Z axis, else from Y
+ * @param {THREE.Color} fallbackColor - Color to use for sides/back
+ * @param {boolean} debugMode - If true, show full texture with transparency
+ */
+function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor, debugMode = false) {
+  if (!texture || !layoutInfo) {
+    return new THREE.MeshBasicMaterial({ color: fallbackColor || 0x666666 });
+  }
+  
+  // Calculate UV offset and scale based on piece position on tile
+  const tileW = layoutInfo.tileW;
+  const tileH = layoutInfo.tileH;
+  const pieceX = layoutInfo.x;
+  const pieceY = layoutInfo.y;
+  const pieceW = layoutInfo.pieceW;
+  const pieceH = layoutInfo.pieceH;
+  
+  // Check if piece is rotated on tile (grainLengthwise = false means rotated 90°)
+  const isRotatedOnTile = layoutInfo.grainLengthwise === false;
+  
+  // UV offset and scale - these define where on the tile texture this piece maps
+  const uvOffsetX = pieceX / tileW;
+  const uvOffsetY = pieceY / tileH;
+  const uvScaleX = pieceW / tileW;
+  const uvScaleY = pieceH / tileH;
+  
+  // Piece size in meters for local coordinate normalization
+  // w, h are ORIGINAL dimensions (before potential rotation for packing)
+  // pieceW, pieceH are dimensions ON THE TILE (after rotation if grainLengthwise=false)
+  // The mesh always has dimensions w x h (length x depth/height)
+  const pieceSizeX = layoutInfo.w / 100;  // Always use original width for mesh X axis
+  const pieceSizeY = layoutInfo.h / 100;  // Always use original height/depth for mesh Y/Z axis
+  
+  const vertexShader = `
+    varying vec3 vLocalPosition;
+    varying vec3 vLocalNormal;
+    
+    void main() {
+      vLocalPosition = position;
+      // Use LOCAL normal directly, not transformed by normalMatrix
+      // This ensures face detection works regardless of camera angle
+      vLocalNormal = normal;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `;
+  
+  const fragmentShader = `
+    uniform sampler2D uTexture;
+    uniform vec2 uPieceOffset;
+    uniform vec2 uPieceScale;
+    uniform vec2 uPieceSize;
+    uniform bool uIsBacksplash;
+    uniform bool uIsRotatedOnTile;
+    uniform vec3 uSideColor;
+    uniform bool uDebugMode;
+    
+    varying vec3 vLocalPosition;
+    varying vec3 vLocalNormal;
+    
+    void main() {
+      vec2 uv;
+      
+      // Check if this is the top/front face (where texture should appear)
+      // Using LOCAL normals so this works regardless of camera orientation
+      bool isMainFace = false;
+      
+      if (uIsBacksplash) {
+        // Backsplash: front face has local normal pointing in +Z direction
+        isMainFace = vLocalNormal.z > 0.5;
+        
+        if (isMainFace) {
+          // Project from Z axis - X is horizontal, Y is vertical
+          // Map local position to 0-1 UV space
+          uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
+          uv.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
+          
+          // If piece is rotated on tile (grainLengthwise=false):
+          if (uIsRotatedOnTile) {
+            vec2 swapped = vec2(uv.y, 1.0 - uv.x);
+            uv = swapped;
+          }
+        }
+      } else {
+        // Slab: top face has local normal pointing in +Y direction
+        isMainFace = vLocalNormal.y > 0.5;
+        
+        if (isMainFace) {
+          // Project from Y axis - X is length, Z is depth
+          uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
+          uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
+          
+          // If piece is rotated on tile (grainLengthwise=false):
+          if (uIsRotatedOnTile) {
+            vec2 swapped = vec2(uv.y, 1.0 - uv.x);
+            uv = swapped;
+          }
+        }
+      }
+      
+      if (isMainFace) {
+        // Map UV from piece space to tile texture space
+        // tileUV goes from uPieceOffset to uPieceOffset + uPieceScale as uv goes 0 to 1
+        vec2 tileUV = uPieceOffset + uv * uPieceScale;
+        
+        if (uDebugMode) {
+          // DEBUG MODE: Show piece texture with gold border
+          // The actual tile visualization is done with a separate helper mesh
+          
+          vec4 texColor = texture2D(uTexture, tileUV);
+          
+          // Border at piece edges
+          float borderW = 0.02;
+          bool atPieceBorder = uv.x < borderW || uv.x > 1.0 - borderW || 
+                               uv.y < borderW || uv.y > 1.0 - borderW;
+          
+          if (atPieceBorder) {
+            // GOLD border = piece edges
+            gl_FragColor = vec4(0.79, 0.66, 0.38, 1.0);
+          } else {
+            // Show texture with slight transparency so tile helper shows through
+            gl_FragColor = vec4(texColor.rgb, 0.9);
+          }
+        } else {
+          gl_FragColor = texture2D(uTexture, tileUV);
+        }
+      } else {
+        // Sides and back: solid color
+        gl_FragColor = vec4(uSideColor, 1.0);
+      }
+    }
+  `;
+  
+  // Calculate average color from fallback (or use a neutral gray)
+  const sideColor = fallbackColor ? 
+    new THREE.Color(fallbackColor).multiplyScalar(0.8) : 
+    new THREE.Color(0.4, 0.4, 0.4);
+  
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uTexture: { value: texture },
+      uPieceOffset: { value: new THREE.Vector2(uvOffsetX, uvOffsetY) },
+      uPieceScale: { value: new THREE.Vector2(uvScaleX, uvScaleY) },
+      uPieceSize: { value: new THREE.Vector2(pieceSizeX, pieceSizeY) },
+      uIsBacksplash: { value: isBacksplash },
+      uIsRotatedOnTile: { value: isRotatedOnTile },
+      uSideColor: { value: sideColor },
+      uDebugMode: { value: debugMode }
+    },
+    vertexShader,
+    fragmentShader,
+    side: THREE.DoubleSide,
+    transparent: debugMode
+  });
+  
+  return material;
+}
 
 // ============================================
 // LAYOUT & TEXTURE MAPPING - SINGLE SOURCE OF TRUTH
@@ -816,6 +1323,7 @@ const inputStyle = {
   width: '100%',
   padding: '10px 12px',
   background: '#1a1a1a',
+  backgroundColor: '#1a1a1a', // Explicit for browsers that ignore 'background'
   border: '1px solid #333',
   borderRadius: '6px',
   color: '#fff',
@@ -823,6 +1331,9 @@ const inputStyle = {
   outline: 'none',
   boxSizing: 'border-box',
   userSelect: 'text',
+  WebkitAppearance: 'none', // Remove default browser styling
+  MozAppearance: 'none',
+  appearance: 'none',
 };
 
 const buttonStyle = {
@@ -935,10 +1446,10 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 // Initialize Supabase client
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Check if user is admin - any @e-blat.com email is admin
+// Check if user is admin - any @e-blat.com email is admin, or user_metadata.isAdmin, or profile.is_admin
 const isAdminEmail = (email) => {
   if (!email) return false;
-  return email.endsWith('@e-blat.com');
+  return email.endsWith('@e-blat.com') || email.endsWith('@atelierazimut.com');
 };
 
 // ============================================
@@ -958,7 +1469,9 @@ function AuthProvider({ children }) {
       id: supabaseUser.id,
       email: supabaseUser.email,
       name: profile?.name || supabaseUser.user_metadata?.name || supabaseUser.email?.split('@')[0],
-      isAdmin: isAdminEmail(supabaseUser.email) || profile?.is_admin === true,
+      isAdmin: isAdminEmail(supabaseUser.email) || 
+               supabaseUser.user_metadata?.isAdmin === true || 
+               profile?.is_admin === true,
     };
   };
 
@@ -2447,6 +2960,7 @@ function Configurator({ project, onBack }) {
   const [texturePreview, setTexturePreview] = useState(null); // { texture: url, name: string }
   const [texturePreviewVisible, setTexturePreviewVisible] = useState(false); // pentru animație fade
   const [materialWarnings, setMaterialWarnings] = useState([]); // Warnings for archived/missing materials
+  const [debugTexture, setDebugTexture] = useState(false); // Debug mode: show full texture with transparency
   
   // Helper for single selection (backward compatibility)
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
@@ -2593,6 +3107,7 @@ function Configurator({ project, onBack }) {
   const meshesRef = useRef({});
   const orbitRef = useRef({ theta: Math.PI / 4, phi: Math.PI / 3, radius: 6 });
   const saveTimeoutRef = useRef(null);
+  const prevDebugTextureRef = useRef(debugTexture);
   
   // Refs for pending transforms during drag (persists across re-renders)
   const pendingGroupTransformsRef = useRef({});
@@ -2753,7 +3268,7 @@ function Configurator({ project, onBack }) {
         
         rawPositions[selectedGroupId] = { x: newX, z: newZ };
         
-        // Snap group elements to other elements (edge to edge)
+        // Snap group elements to other elements (using 5 snap points)
         if (snapEnabled) {
           const SNAP_THRESHOLD = 0.10;
           const snapIndicators = [];
@@ -2766,7 +3281,7 @@ function Configurator({ project, onBack }) {
           
           // Check each group member against non-group elements
           groupMembers.forEach(member => {
-            if (snapDeltaX !== null && snapDeltaZ !== null) return; // Already found both snaps
+            if (snapDeltaX !== null && snapDeltaZ !== null) return;
             
             // Calculate member's would-be world position
             const localX = member.localOffset?.x || 0;
@@ -2780,10 +3295,16 @@ function Configurator({ project, onBack }) {
             let memberD = member.type === 'backsplash' ? (member.thickness || 12) / 1000 : member.depth / 100;
             if (isRotated90) [memberW, memberD] = [memberD, memberW];
             
-            const memberLeft = memberWorldX - memberW / 2;
-            const memberRight = memberWorldX + memberW / 2;
-            const memberFront = memberWorldZ - memberD / 2;
-            const memberBack = memberWorldZ + memberD / 2;
+            const memberY = (member.placementHeight || 0) / 100;
+            
+            // Member's 5 snap points
+            const memberPoints = [
+              { x: memberWorldX - memberW / 2, z: memberWorldZ - memberD / 2 },
+              { x: memberWorldX + memberW / 2, z: memberWorldZ - memberD / 2 },
+              { x: memberWorldX - memberW / 2, z: memberWorldZ + memberD / 2 },
+              { x: memberWorldX + memberW / 2, z: memberWorldZ + memberD / 2 },
+              { x: memberWorldX, z: memberWorldZ - memberD / 2 }, // Front-center
+            ];
             
             elements.forEach(other => {
               if (other.groupId === selectedGroupId) return;
@@ -2795,30 +3316,31 @@ function Configurator({ project, onBack }) {
               let otherD = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
               if (otherIsRotated90) [otherW, otherD] = [otherD, otherW];
               
-              const otherLeft = otherPos.x - otherW / 2;
-              const otherRight = otherPos.x + otherW / 2;
-              const otherFront = otherPos.z - otherD / 2;
-              const otherBack = otherPos.z + otherD / 2;
+              const otherY = (other.placementHeight || 0) / 100;
+              const heightDiff = Math.abs(memberY - otherY);
+              const snapType = heightDiff > 0.01 ? 'warning' : 'element';
               
-              // X snaps
-              if (snapDeltaX === null && Math.abs(memberRight - otherLeft) < SNAP_THRESHOLD) {
-                snapDeltaX = otherLeft - memberRight;
-                snapIndicators.push({ x: otherLeft, z: memberWorldZ, axis: 'x' });
-              }
-              if (snapDeltaX === null && Math.abs(memberLeft - otherRight) < SNAP_THRESHOLD) {
-                snapDeltaX = otherRight - memberLeft;
-                snapIndicators.push({ x: otherRight, z: memberWorldZ, axis: 'x' });
-              }
+              // Other's 5 snap points
+              const otherPoints = [
+                { x: otherPos.x - otherW / 2, z: otherPos.z - otherD / 2 },
+                { x: otherPos.x + otherW / 2, z: otherPos.z - otherD / 2 },
+                { x: otherPos.x - otherW / 2, z: otherPos.z + otherD / 2 },
+                { x: otherPos.x + otherW / 2, z: otherPos.z + otherD / 2 },
+                { x: otherPos.x, z: otherPos.z - otherD / 2 },
+              ];
               
-              // Z snaps
-              if (snapDeltaZ === null && Math.abs(memberBack - otherFront) < SNAP_THRESHOLD) {
-                snapDeltaZ = otherFront - memberBack;
-                snapIndicators.push({ x: memberWorldX, z: otherFront, axis: 'z' });
-              }
-              if (snapDeltaZ === null && Math.abs(memberFront - otherBack) < SNAP_THRESHOLD) {
-                snapDeltaZ = otherBack - memberFront;
-                snapIndicators.push({ x: memberWorldX, z: otherBack, axis: 'z' });
-              }
+              memberPoints.forEach(mp => {
+                otherPoints.forEach(op => {
+                  if (snapDeltaX === null && Math.abs(mp.x - op.x) < SNAP_THRESHOLD) {
+                    snapDeltaX = op.x - mp.x;
+                    snapIndicators.push({ x: op.x, z: (mp.z + op.z) / 2, axis: 'x', y: memberY, type: snapType });
+                  }
+                  if (snapDeltaZ === null && Math.abs(mp.z - op.z) < SNAP_THRESHOLD) {
+                    snapDeltaZ = op.z - mp.z;
+                    snapIndicators.push({ x: (mp.x + op.x) / 2, z: op.z, axis: 'z', y: memberY, type: snapType });
+                  }
+                });
+              });
             });
           });
           
@@ -2876,10 +3398,15 @@ function Configurator({ project, onBack }) {
             let movingDepth = el.type === 'backsplash' ? (el.thickness || 12) / 1000 : el.depth / 100;
             if (isRotated90) [movingWidth, movingDepth] = [movingDepth, movingWidth];
             
-            const movingLeft = newX - movingWidth / 2;
-            const movingRight = newX + movingWidth / 2;
-            const movingFront = newZ - movingDepth / 2;
-            const movingBack = newZ + movingDepth / 2;
+            // Moving element's 5 snap points: 4 corners + center front
+            const movingY = (el.placementHeight || 0) / 100; // Height of moving element
+            const movingPoints = [
+              { x: newX - movingWidth / 2, z: newZ - movingDepth / 2, name: 'FL' }, // Front-Left
+              { x: newX + movingWidth / 2, z: newZ - movingDepth / 2, name: 'FR' }, // Front-Right
+              { x: newX - movingWidth / 2, z: newZ + movingDepth / 2, name: 'BL' }, // Back-Left
+              { x: newX + movingWidth / 2, z: newZ + movingDepth / 2, name: 'BR' }, // Back-Right
+              { x: newX, z: newZ - movingDepth / 2, name: 'FC' }, // Front-Center
+            ];
             
             let snapX = null, snapZ = null;
             
@@ -2894,41 +3421,89 @@ function Configurator({ project, onBack }) {
               let otherDepth = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
               if (otherIsRotated90) [otherWidth, otherDepth] = [otherDepth, otherWidth];
               
-              const otherLeft = otherPos.x - otherWidth / 2;
-              const otherRight = otherPos.x + otherWidth / 2;
-              const otherFront = otherPos.z - otherDepth / 2;
-              const otherBack = otherPos.z + otherDepth / 2;
+              // Other element's 5 snap points
+              const otherY = (other.placementHeight || 0) / 100;
+              const otherPoints = [
+                { x: otherPos.x - otherWidth / 2, z: otherPos.z - otherDepth / 2, name: 'FL' },
+                { x: otherPos.x + otherWidth / 2, z: otherPos.z - otherDepth / 2, name: 'FR' },
+                { x: otherPos.x - otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BL' },
+                { x: otherPos.x + otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BR' },
+                { x: otherPos.x, z: otherPos.z - otherDepth / 2, name: 'FC' },
+              ];
               
-              // X snaps - edge to edge
-              if (snapX === null && Math.abs(movingRight - otherLeft) < SNAP_THRESHOLD) {
-                snapX = otherLeft - movingWidth / 2;
-                snapIndicators.push({ x: otherLeft, z: newZ, axis: 'x' });
-              }
-              if (snapX === null && Math.abs(movingLeft - otherRight) < SNAP_THRESHOLD) {
-                snapX = otherRight + movingWidth / 2;
-                snapIndicators.push({ x: otherRight, z: newZ, axis: 'x' });
-              }
-              // Center to center X
-              if (snapX === null && Math.abs(newX - otherPos.x) < SNAP_THRESHOLD) {
-                snapX = otherPos.x;
-                snapIndicators.push({ x: otherPos.x, z: newZ, axis: 'x' });
-              }
+              // Determine snap type based on height difference
+              const heightDiff = Math.abs(movingY - otherY);
+              const snapType = heightDiff > 0.01 ? 'warning' : 'element'; // Red if different heights
+              const indicatorY = movingY; // Use height of element being dragged
               
-              // Z snaps - edge to edge
-              if (snapZ === null && Math.abs(movingBack - otherFront) < SNAP_THRESHOLD) {
-                snapZ = otherFront - movingDepth / 2;
-                snapIndicators.push({ x: newX, z: otherFront, axis: 'z' });
-              }
-              if (snapZ === null && Math.abs(movingFront - otherBack) < SNAP_THRESHOLD) {
-                snapZ = otherBack + movingDepth / 2;
-                snapIndicators.push({ x: newX, z: otherBack, axis: 'z' });
-              }
-              // Center to center Z
-              if (snapZ === null && Math.abs(newZ - otherPos.z) < SNAP_THRESHOLD) {
-                snapZ = otherPos.z;
-                snapIndicators.push({ x: newX, z: otherPos.z, axis: 'z' });
-              }
+              // Check all point combinations for snap
+              movingPoints.forEach(mp => {
+                otherPoints.forEach(op => {
+                  // X snap - align X coordinates of any two points
+                  if (snapX === null && Math.abs(mp.x - op.x) < SNAP_THRESHOLD) {
+                    const deltaX = op.x - mp.x;
+                    snapX = newX + deltaX;
+                    snapIndicators.push({ 
+                      x: op.x, 
+                      z: (mp.z + op.z) / 2, 
+                      axis: 'x', 
+                      y: indicatorY,
+                      type: snapType 
+                    });
+                  }
+                  
+                  // Z snap - align Z coordinates of any two points
+                  if (snapZ === null && Math.abs(mp.z - op.z) < SNAP_THRESHOLD) {
+                    const deltaZ = op.z - mp.z;
+                    snapZ = newZ + deltaZ;
+                    snapIndicators.push({ 
+                      x: (mp.x + op.x) / 2, 
+                      z: op.z, 
+                      axis: 'z', 
+                      y: indicatorY,
+                      type: snapType 
+                    });
+                  }
+                });
+              });
             });
+            
+            // Grid snap (if no element snap found) - use blue color
+            // Priority: 60cm (kitchen module) > 10cm (fine grid)
+            const GRID_60 = 0.6; // 60cm - kitchen module
+            const GRID_10 = 0.1; // 10cm - fine grid
+            const indicatorY = (el.placementHeight || 0) / 100;
+            
+            if (snapX === null) {
+              // Try 60cm grid first (stronger snap)
+              const grid60X = Math.round(newX / GRID_60) * GRID_60;
+              if (Math.abs(newX - grid60X) < SNAP_THRESHOLD) {
+                snapX = grid60X;
+                snapIndicators.push({ x: grid60X, z: newZ, axis: 'x', y: indicatorY, type: 'grid' });
+              } else {
+                // Try 10cm grid
+                const grid10X = Math.round(newX / GRID_10) * GRID_10;
+                if (Math.abs(newX - grid10X) < SNAP_THRESHOLD / 2) {
+                  snapX = grid10X;
+                  snapIndicators.push({ x: grid10X, z: newZ, axis: 'x', y: indicatorY, type: 'grid' });
+                }
+              }
+            }
+            if (snapZ === null) {
+              // Try 60cm grid first
+              const grid60Z = Math.round(newZ / GRID_60) * GRID_60;
+              if (Math.abs(newZ - grid60Z) < SNAP_THRESHOLD) {
+                snapZ = grid60Z;
+                snapIndicators.push({ x: newX, z: grid60Z, axis: 'z', y: indicatorY, type: 'grid' });
+              } else {
+                // Try 10cm grid
+                const grid10Z = Math.round(newZ / GRID_10) * GRID_10;
+                if (Math.abs(newZ - grid10Z) < SNAP_THRESHOLD / 2) {
+                  snapZ = grid10Z;
+                  snapIndicators.push({ x: newX, z: grid10Z, axis: 'z', y: indicatorY, type: 'grid' });
+                }
+              }
+            }
             
             if (snapX !== null) {
               snapDeltaX = snapX - newX;
@@ -3169,9 +3744,77 @@ function Configurator({ project, onBack }) {
     const ambient = new THREE.AmbientLight(0xffffff, 1.0);
     scene.add(ambient);
 
-    // Grid
-    const grid = new THREE.GridHelper(10, 20, 0x333333, 0x222222);
-    scene.add(grid);
+    // Create XYZ corner grid system (like a 3D graph)
+    const gridSize = 5; // 5 meters in each direction
+    const gridDivisions = 10; // 50cm divisions
+    const gridColor = 0x333333;
+    const gridColorSecondary = 0x222222;
+    
+    // Floor grid (XZ plane) - positioned at corner, not centered
+    const floorGrid = new THREE.GridHelper(gridSize * 2, gridDivisions * 2, gridColor, gridColorSecondary);
+    floorGrid.position.set(gridSize, 0, gridSize); // Shift so corner is at origin
+    scene.add(floorGrid);
+    
+    // Create wireframe walls for left (YZ plane at X=0) and back (XY plane at Z=0)
+    const wallMaterial = new THREE.LineBasicMaterial({ color: gridColor, transparent: true, opacity: 0.5 });
+    
+    // Left wall grid (YZ plane at X=0)
+    const leftWallPoints = [];
+    const wallHeight = 2.5; // 2.5 meters tall
+    const wallHeightDivisions = 5; // 50cm divisions
+    
+    // Vertical lines on left wall
+    for (let z = 0; z <= gridSize * 2; z += gridSize * 2 / gridDivisions) {
+      leftWallPoints.push(new THREE.Vector3(0, 0, z));
+      leftWallPoints.push(new THREE.Vector3(0, wallHeight, z));
+    }
+    // Horizontal lines on left wall
+    for (let y = 0; y <= wallHeight; y += wallHeight / wallHeightDivisions) {
+      leftWallPoints.push(new THREE.Vector3(0, y, 0));
+      leftWallPoints.push(new THREE.Vector3(0, y, gridSize * 2));
+    }
+    
+    const leftWallGeometry = new THREE.BufferGeometry().setFromPoints(leftWallPoints);
+    const leftWall = new THREE.LineSegments(leftWallGeometry, wallMaterial);
+    scene.add(leftWall);
+    
+    // Back wall grid (XY plane at Z=0)
+    const backWallPoints = [];
+    
+    // Vertical lines on back wall
+    for (let x = 0; x <= gridSize * 2; x += gridSize * 2 / gridDivisions) {
+      backWallPoints.push(new THREE.Vector3(x, 0, 0));
+      backWallPoints.push(new THREE.Vector3(x, wallHeight, 0));
+    }
+    // Horizontal lines on back wall
+    for (let y = 0; y <= wallHeight; y += wallHeight / wallHeightDivisions) {
+      backWallPoints.push(new THREE.Vector3(0, y, 0));
+      backWallPoints.push(new THREE.Vector3(gridSize * 2, y, 0));
+    }
+    
+    const backWallGeometry = new THREE.BufferGeometry().setFromPoints(backWallPoints);
+    const backWall = new THREE.LineSegments(backWallGeometry, wallMaterial);
+    scene.add(backWall);
+    
+    // Add axis lines at corner (thicker/colored)
+    const axisLength = 0.5;
+    const axisMaterialX = new THREE.LineBasicMaterial({ color: 0xff4444, linewidth: 2 }); // Red for X
+    const axisMaterialY = new THREE.LineBasicMaterial({ color: 0x44ff44, linewidth: 2 }); // Green for Y
+    const axisMaterialZ = new THREE.LineBasicMaterial({ color: 0x4444ff, linewidth: 2 }); // Blue for Z
+    
+    const xAxisGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(axisLength, 0, 0)
+    ]);
+    const yAxisGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, axisLength, 0)
+    ]);
+    const zAxisGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, axisLength)
+    ]);
+    
+    scene.add(new THREE.Line(xAxisGeo, axisMaterialX));
+    scene.add(new THREE.Line(yAxisGeo, axisMaterialY));
+    scene.add(new THREE.Line(zAxisGeo, axisMaterialZ));
 
     // Snap indicators (visual feedback for snap points)
     const snapIndicatorMeshes = [];
@@ -3183,6 +3826,13 @@ function Configurator({ project, onBack }) {
       depthTest: false  // Render on top of everything
     });
     
+    // Materials for different snap types
+    const snapMaterials = {
+      element: new THREE.LineBasicMaterial({ color: 0x00ff00, depthTest: false }), // Green - same height
+      grid: new THREE.LineBasicMaterial({ color: 0x4488ff, depthTest: false }),    // Blue - grid snap
+      warning: new THREE.LineBasicMaterial({ color: 0xff4444, depthTest: false })  // Red - different heights
+    };
+    
     window.updateSnapIndicators = (indicators) => {
       // Remove old indicators
       snapIndicatorMeshes.forEach(mesh => scene.remove(mesh));
@@ -3190,31 +3840,35 @@ function Configurator({ project, onBack }) {
       
       // Add new indicators
       indicators.forEach(ind => {
-        // Create a vertical line at snap point
+        const y = ind.y ?? 0.01; // Use provided height or default
+        const snapType = ind.type || 'element'; // 'element', 'grid', or 'warning'
+        const material = snapMaterials[snapType] || snapMaterials.element;
+        
+        // Create a line at snap point at correct height
         const points = [];
         if (ind.axis === 'x') {
-          points.push(new THREE.Vector3(ind.x, 0, ind.z - 2));
-          points.push(new THREE.Vector3(ind.x, 0, ind.z + 2));
+          points.push(new THREE.Vector3(ind.x, y, ind.z - 2));
+          points.push(new THREE.Vector3(ind.x, y, ind.z + 2));
         } else {
-          points.push(new THREE.Vector3(ind.x - 2, 0, ind.z));
-          points.push(new THREE.Vector3(ind.x + 2, 0, ind.z));
+          points.push(new THREE.Vector3(ind.x - 2, y, ind.z));
+          points.push(new THREE.Vector3(ind.x + 2, y, ind.z));
         }
         
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
-        const line = new THREE.Line(geometry, snapLineMaterial);
-        line.position.y = 0.01;
+        const line = new THREE.Line(geometry, material);
         line.renderOrder = 999; // Render last
         scene.add(line);
         snapIndicatorMeshes.push(line);
         
-        // Add a small sphere at intersection
+        // Add a small sphere at intersection with matching color
         const sphereGeo = new THREE.SphereGeometry(0.03, 8, 8);
+        const sphereColor = snapType === 'warning' ? 0xff4444 : (snapType === 'grid' ? 0x4488ff : 0x4a9962);
         const sphereMat = new THREE.MeshBasicMaterial({ 
-          color: 0x4a9962,
+          color: sphereColor,
           depthTest: false  // Render on top
         });
         const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-        sphere.position.set(ind.x, 0.02, ind.z);
+        sphere.position.set(ind.x, y + 0.01, ind.z);
         sphere.renderOrder = 999; // Render last
         scene.add(sphere);
         snapIndicatorMeshes.push(sphere);
@@ -3649,6 +4303,7 @@ function Configurator({ project, onBack }) {
       waterfallRight: el.waterfallRight,
       waterfallHeight: el.waterfallHeight,
       grainLengthwise: el.grainLengthwise,
+      cutouts: el.cutouts, // Include cutouts in hash for change detection
     });
   };
 
@@ -3693,9 +4348,12 @@ function Configurator({ project, onBack }) {
       // Check if groupId changed (affects highlight color)
       const groupIdChanged = prevEl && (prevEl.groupId !== el.groupId);
       
+      // Check if debugTexture mode changed (affects material shader)
+      const debugModeChanged = prevDebugTextureRef.current !== debugTexture;
+      
       // If only position/rotation changed, just update the mesh transform
       // But skip if we're dragging - the drag handlers update positions directly
-      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && meshesRef.current[el.id]) {
+      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && !debugModeChanged && meshesRef.current[el.id]) {
         if (!isDraggingRef.current) {
           const mesh = meshesRef.current[el.id];
           const worldPos = getWorldPosition(el);
@@ -3711,8 +4369,9 @@ function Configurator({ project, onBack }) {
       // (so the colored highlights work correctly)
       const hasWaterfall = el.waterfallLeft || el.waterfallRight;
       
+      // If debug mode changed, force full mesh recreation to update shader
       // If only selection or groupId changed and NO waterfall, update outline without recreating
-      if (!isNew && !geometryChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
+      if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         
         // Remove existing outlines (need to collect parent-child pairs)
@@ -3789,70 +4448,48 @@ function Configurator({ project, onBack }) {
       
       if (el.type === 'backsplash') {
         const panelHeight = el.height / 100;
-        geometry = new THREE.BoxGeometry(width, panelHeight, thicknessCm);
+        // Use cutout-aware geometry
+        geometry = createGeometryWithCutouts(el.length, el.height, el.thickness || 12, el.cutouts, true);
         posY = placementHeight + panelHeight / 2;
       } else {
         const depth = el.depth / 100;
-        geometry = new THREE.BoxGeometry(width, thicknessCm, depth);
+        // Use cutout-aware geometry
+        geometry = createGeometryWithCutouts(el.length, el.depth, el.thickness || 12, el.cutouts, false);
         posY = placementHeight + thicknessCm / 2;
       }
 
-      // Create material - use MeshBasicMaterial for flat shading (no light reaction)
+      // Create material - use triplanar shader for proper UV mapping with cutouts
       const hasTexture = colorData.texture && layoutInfo;
-      const material = new THREE.MeshBasicMaterial({ 
-        color: hasTexture ? 0xffffff : color, 
-      });
+      let material;
       
-      // Load texture if available and apply UV mapping based on layout
       if (hasTexture) {
+        // Load texture and create triplanar shader material
         const textureLoader = new THREE.TextureLoader();
+        const isBacksplash = el.type === 'backsplash';
+        
+        // Create placeholder material first
+        material = new THREE.MeshBasicMaterial({ color: color });
+        
         textureLoader.load(colorData.texture, (texture) => {
-          // Use getTextureRegion for consistent UV mapping
-          const region = getTextureRegion(layoutInfo);
-          const { u0, u1, v0, v1, rotation } = region;
-          
-          // Check if piece exceeds tile dimensions
-          const exceedsTile = layoutInfo.pieceW > layoutInfo.tileW || layoutInfo.pieceH > layoutInfo.tileH;
-          
-          if (exceedsTile) {
-            // Use repeat wrapping for oversized pieces
-            texture.wrapS = THREE.RepeatWrapping;
-            texture.wrapT = THREE.RepeatWrapping;
-            
-            const repeatX = layoutInfo.pieceW / layoutInfo.tileW;
-            const repeatY = layoutInfo.pieceH / layoutInfo.tileH;
-            
-            texture.repeat.set(repeatX, repeatY);
-            texture.offset.set(0, 0);
-          } else {
-            // Normal UV mapping using region bounds
-            texture.wrapS = THREE.ClampToEdgeWrapping;
-            texture.wrapT = THREE.ClampToEdgeWrapping;
-            
-            // Convert UV bounds to repeat/offset
-            // repeat = size of region, offset = start of region
-            const uScale = u1 - u0;
-            const vScale = v1 - v0;
-            
-            texture.repeat.set(uScale, vScale);
-            texture.offset.set(u0, v0);
-            
-            // Apply rotation if needed (for waterfall pieces)
-            if (rotation !== 0) {
-              texture.center.set(0.5, 0.5);
-              texture.rotation = rotation;
-            }
-          }
-          
-          // Enable anisotropic filtering to reduce moiré patterns
+          // Configure texture
+          texture.wrapS = THREE.ClampToEdgeWrapping;
+          texture.wrapT = THREE.ClampToEdgeWrapping;
           texture.anisotropy = rendererRef.current?.capabilities?.getMaxAnisotropy() || 4;
           texture.minFilter = THREE.LinearMipmapLinearFilter;
           texture.magFilter = THREE.LinearFilter;
           texture.generateMipmaps = true;
           
-          material.map = texture;
-          material.needsUpdate = true;
+          // Create triplanar material - uses local coords so no need to update position
+          // Only enable debug mode for SELECTED elements
+          const isDebugActive = debugTexture && shouldHighlight;
+          const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color, isDebugActive);
+          
+          // Replace material on mesh
+          mesh.material = triplanarMat;
+          mesh.material.needsUpdate = true;
         });
+      } else {
+        material = new THREE.MeshBasicMaterial({ color: color });
       }
       
       const mesh = new THREE.Mesh(geometry, material);
@@ -4033,6 +4670,98 @@ function Configurator({ project, onBack }) {
 
       sceneRef.current.add(mesh);
       meshesRef.current[el.id] = mesh;
+      
+      // DEBUG MODE: Create a helper mesh showing the FULL TILE at real scale
+      // Only for SELECTED elements to avoid visual clutter
+      const isDebugActive = debugTexture && shouldHighlight;
+      if (isDebugActive && layoutInfo && colorData.texture) {
+        const tileW = layoutInfo.tileW / 100; // tile width in meters (e.g., 3.2m for 320cm)
+        const tileH = layoutInfo.tileH / 100; // tile height in meters (e.g., 1.6m for 160cm)
+        
+        // Piece position on tile (in meters, from tile origin at top-left)
+        const pieceX = layoutInfo.x / 100; // piece X offset on tile
+        const pieceY = layoutInfo.y / 100; // piece Y offset on tile
+        const pieceW = layoutInfo.pieceW / 100; // piece width on tile
+        const pieceH = layoutInfo.pieceH / 100; // piece height on tile
+        
+        // The piece mesh is centered at (0,0) in local coords
+        // On the tile, the piece occupies from (pieceX, pieceY) to (pieceX+pieceW, pieceY+pieceH)
+        // 
+        // We need to position the tile so that when the piece is at its world position,
+        // the tile's texture aligns correctly.
+        //
+        // Tile center offset from piece center:
+        // Piece center on tile: (pieceX + pieceW/2, pieceY + pieceH/2)
+        // Tile center: (tileW/2, tileH/2)
+        // Offset: tileCenter - pieceCenter
+        
+        const pieceCenterOnTileX = pieceX + pieceW / 2;
+        const pieceCenterOnTileY = pieceY + pieceH / 2;
+        const tileCenterX = tileW / 2;
+        const tileCenterY = tileH / 2;
+        
+        // Offset from piece center to tile center (in tile's local coordinate system)
+        const offsetX = tileCenterX - pieceCenterOnTileX;
+        const offsetZ = tileCenterY - pieceCenterOnTileY; // Y on tile maps to Z in 3D for slab
+        
+        // Create tile geometry
+        const isBacksplash = el.type === 'backsplash';
+        let tileGeo;
+        if (isBacksplash) {
+          tileGeo = new THREE.PlaneGeometry(tileW, tileH);
+        } else {
+          tileGeo = new THREE.PlaneGeometry(tileW, tileH);
+          tileGeo.rotateX(-Math.PI / 2); // Lay flat for slab
+        }
+        
+        // Create tile material with full texture and transparency
+        const tileMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.5,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        
+        // Load texture for the tile helper
+        const textureLoader = new THREE.TextureLoader();
+        textureLoader.load(colorData.texture, (texture) => {
+          texture.wrapS = THREE.ClampToEdgeWrapping;
+          texture.wrapT = THREE.ClampToEdgeWrapping;
+          tileMat.map = texture;
+          tileMat.needsUpdate = true;
+        });
+        
+        const tileMesh = new THREE.Mesh(tileGeo, tileMat);
+        tileMesh.renderOrder = -1; // Render behind the piece
+        
+        // Position the tile mesh relative to the piece
+        // The piece is at world position, we offset the tile so it aligns
+        if (isBacksplash) {
+          // For backsplash: offset in X and Y
+          tileMesh.position.set(offsetX, -offsetZ, -0.001); // Slightly behind
+        } else {
+          // For slab: offset in X and Z, slightly below
+          tileMesh.position.set(offsetX, -0.001, offsetZ);
+        }
+        
+        // Add wireframe border to show tile edges
+        const tileEdges = new THREE.EdgesGeometry(tileGeo);
+        const tileLineMat = new THREE.LineBasicMaterial({ 
+          color: 0x00ffff, // Cyan
+          linewidth: 2,
+          depthTest: false,
+        });
+        const tileOutline = new THREE.LineSegments(tileEdges, tileLineMat);
+        tileOutline.renderOrder = 999;
+        tileMesh.add(tileOutline);
+        
+        // Mark as debug helper so we can identify it later
+        tileMesh.userData.isDebugTileHelper = true;
+        
+        // Add tile as child of the piece mesh so it moves/rotates with it
+        mesh.add(tileMesh);
+      }
     });
     
     // Update prevElementsRef with current state including selection
@@ -4045,7 +4774,10 @@ function Configurator({ project, onBack }) {
       newPrevElements[el.id] = { ...el, _wasSelected: isDirectlySelected || isGroupSelected };
     });
     prevElementsRef.current = newPrevElements;
-  }, [elements, selectedIds, library, pieceLayout, groups]);
+    
+    // Update debug texture ref for next comparison
+    prevDebugTextureRef.current = debugTexture;
+  }, [elements, selectedIds, library, pieceLayout, groups, debugTexture]);
 
   // Helper functions
   const getColorById = (id) => library.colors.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
@@ -4092,7 +4824,56 @@ function Configurator({ project, onBack }) {
   };
 
   const updateElement = (id, updates) => {
-    setElements(elements.map(el => el.id === id ? { ...el, ...updates } : el));
+    setElements(elements.map(el => {
+      if (el.id !== id) return el;
+      
+      // Check if length is changing and element has cutouts
+      if (updates.length !== undefined && el.cutouts && el.cutouts.length > 0) {
+        const oldLength = el.length;
+        const newLength = updates.length;
+        const lengthDelta = newLength - oldLength;
+        
+        if (lengthDelta !== 0) {
+          // Reposition cutouts to maintain their cotaStânga (distance from left edge)
+          // When piece grows symmetrically, the left edge moves LEFT by delta/2
+          // So cutout center must move LEFT by delta/2 to stay at same cotaStânga
+          // center.x is relative to piece center, so we SUBTRACT delta/2
+          const updatedCutouts = el.cutouts.map(cutout => ({
+            ...cutout,
+            center: {
+              ...cutout.center,
+              x: cutout.center.x - lengthDelta / 2
+            }
+          }));
+          
+          return { ...el, ...updates, cutouts: updatedCutouts };
+        }
+      }
+      
+      // Same logic for depth/height changes (maintain cotaFață)
+      const depthKey = el.type === 'backsplash' ? 'height' : 'depth';
+      if (updates[depthKey] !== undefined && el.cutouts && el.cutouts.length > 0) {
+        const oldDepth = el[depthKey];
+        const newDepth = updates[depthKey];
+        const depthDelta = newDepth - oldDepth;
+        
+        if (depthDelta !== 0) {
+          // Reposition cutouts to maintain their cotaFață (distance from front edge)
+          // Same logic - front edge moves forward by delta/2, so center moves by -delta/2
+          const updatedCutouts = (updates.cutouts || el.cutouts).map(cutout => ({
+            ...cutout,
+            center: {
+              ...cutout.center,
+              z: cutout.center.z - depthDelta / 2
+            }
+          }));
+          
+          return { ...el, ...updates, cutouts: updatedCutouts };
+        }
+      }
+      
+      return { ...el, ...updates };
+    }));
   };
 
   const removeElement = (id) => {
@@ -4298,6 +5079,8 @@ function Configurator({ project, onBack }) {
         x: (el.position?.x || 0) + 0.3, 
         z: (el.position?.z || 0) + 0.3 
       },
+      // Regenerate cutout IDs to avoid duplicates
+      cutouts: el.cutouts?.map(c => ({ ...c, id: Math.random().toString(36).substr(2, 9) }))
     }));
     
     setElements([...elements, ...newElements]);
@@ -4393,6 +5176,21 @@ function Configurator({ project, onBack }) {
             <span style={{ color: '#666', fontSize: '13px', marginLeft: '8px' }}>/ {project.name}</span>
           </div>
           {saveStatus && <span style={{ fontSize: '10px', color: '#4a9', marginLeft: '8px' }}>✓ Salvat</span>}
+          <div style={{ width: '1px', height: '20px', background: '#333' }} />
+          <button 
+            onClick={() => setDebugTexture(!debugTexture)} 
+            style={{ 
+              ...toolBtnStyle(debugTexture), 
+              background: debugTexture ? 'rgba(147,112,219,0.2)' : '#1a1a1a', 
+              borderColor: debugTexture ? '#9370db' : '#2a2a2a', 
+              color: debugTexture ? '#9370db' : '#666',
+              fontSize: '11px',
+              padding: '4px 8px'
+            }}
+            title="Afișează textura completă pe piese (pentru debug UV mapping)"
+          >
+            🔍 Debug Textură {debugTexture ? 'ON' : 'OFF'}
+          </button>
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -4505,11 +5303,23 @@ function Configurator({ project, onBack }) {
             </div>
             {elements.length === 0 ? (
               <div style={{ padding: '20px', textAlign: 'center', color: '#555', fontSize: '11px' }}>Adaugă un element</div>
-            ) : elements.map(el => {
+            ) : elements.map((el, index) => {
               const isSelected = selectedIds.includes(el.id);
               const hasGroup = el.groupId;
               const groupColorData = getGroupColor(el.groupId);
               const groupColor = groupColorData?.hsl;
+              
+              // Get piece numbers for this element from layout
+              const elementPieces = layoutData.pieces?.filter(p => p.elementId === el.id) || [];
+              const pieceNumbers = elementPieces.map(p => p.pieceNumber).filter(Boolean);
+              const pieceNumberStr = pieceNumbers.length > 0 ? pieceNumbers.sort((a,b) => {
+                const numA = parseInt(a.replace(/\D/g, ''));
+                const numB = parseInt(b.replace(/\D/g, ''));
+                return numA - numB;
+              }).join(', ') : `${index + 1}`;
+              
+              // Check if any piece exceeds tile dimensions
+              const hasExceedingPiece = elementPieces.some(p => p.exceeds);
               
               return (
                 <div
@@ -4522,16 +5332,24 @@ function Configurator({ project, onBack }) {
                     background: isSelected ? (groupColorData ? `hsla(${groupColorData.hue}, 60%, 50%, 0.15)` : 'rgba(201,169,98,0.15)') : '#1a1a1a',
                     border: `2px solid ${isSelected ? (groupColor || '#c9a962') : '#2a2a2a'}`,
                     borderRadius: '4px',
-                    borderLeft: hasGroup ? `4px solid ${groupColor}` : undefined,
+                    borderLeft: hasGroup ? `4px solid ${groupColor}` : (hasExceedingPiece ? '4px solid #c96262' : undefined),
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 500, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ 
+                          color: hasExceedingPiece ? '#c96262' : '#c9a962', 
+                          fontWeight: 700,
+                          minWidth: '20px'
+                        }}>
+                          {pieceNumberStr}
+                        </span>
                         {el.name}
                         {hasGroup && <span style={{ fontSize: '9px', color: groupColor, background: 'rgba(255,255,255,0.1)', padding: '1px 4px', borderRadius: '3px' }}>GRUP</span>}
+                        {hasExceedingPiece && <span style={{ fontSize: '9px', color: '#c96262', background: 'rgba(201,98,98,0.2)', padding: '1px 4px', borderRadius: '3px' }}>⚠️</span>}
                       </div>
-                      <div style={{ fontSize: '10px', color: '#666' }}>{el.length}×{el.type === 'backsplash' ? el.height : el.depth}cm • {el.thickness}mm</div>
+                      <div style={{ fontSize: '10px', color: hasExceedingPiece ? '#c96262' : '#666' }}>{el.length}×{el.type === 'backsplash' ? el.height : el.depth}cm • {el.thickness}mm</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
                         <div style={{ width: '12px', height: '12px', background: getColorById(el.material)?.color, borderRadius: '2px', border: '1px solid #333' }} />
                         <span style={{ fontSize: '10px', color: '#888' }}>{getColorById(el.material)?.name}</span>
@@ -4628,11 +5446,29 @@ function Configurator({ project, onBack }) {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                   <div>
                     <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Lungime (cm)</label>
-                    <NumericInput value={selected.length} onChange={v => updateElement(selected.id, { length: v })} min={1} style={{ ...inputStyle, padding: '8px' }} />
+                    <NumericInput value={selected.length} onChange={v => updateElement(selected.id, { length: v })} min={1} style={{ ...inputStyle, padding: '8px', borderColor: selected.length > 320 ? '#c96262' : undefined, background: selected.length > 320 ? 'rgba(201,98,98,0.1)' : undefined }} />
+                    {selected.length > 320 && (
+                      <div style={{ fontSize: '9px', color: '#c96262', marginTop: '4px' }}>
+                        ⚠️ Depășește 320cm
+                      </div>
+                    )}
                   </div>
                   <div>
-                    <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>{selected.type === 'backsplash' ? 'Înălțime' : 'Adâncime'} (cm)</label>
-                    <NumericInput value={selected.type === 'backsplash' ? selected.height : selected.depth} onChange={v => updateElement(selected.id, selected.type === 'backsplash' ? { height: v } : { depth: v })} min={1} style={{ ...inputStyle, padding: '8px' }} />
+                    {(() => {
+                      const widthValue = selected.type === 'backsplash' ? selected.height : selected.depth;
+                      const exceedsWidth = widthValue > 160;
+                      return (
+                        <>
+                          <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>{selected.type === 'backsplash' ? 'Înălțime' : 'Adâncime'} (cm)</label>
+                          <NumericInput value={widthValue} onChange={v => updateElement(selected.id, selected.type === 'backsplash' ? { height: v } : { depth: v })} min={1} style={{ ...inputStyle, padding: '8px', borderColor: exceedsWidth ? '#c96262' : undefined, background: exceedsWidth ? 'rgba(201,98,98,0.1)' : undefined }} />
+                          {exceedsWidth && (
+                            <div style={{ fontSize: '9px', color: '#c96262', marginTop: '4px' }}>
+                              ⚠️ Depășește 160cm
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
                 
@@ -4983,6 +5819,250 @@ function Configurator({ project, onBack }) {
                 />
               </div>
 
+              {/* Cutouts Section */}
+              <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                <div style={{ fontSize: '10px', color: '#c9a962', marginBottom: '10px', fontWeight: 600 }}>✂️ DECUPAJE</div>
+                
+                {/* Add Cutout Dropdown */}
+                <div style={{ marginBottom: '12px' }}>
+                  <select
+                    value=""
+                    onChange={e => {
+                      if (!e.target.value) return;
+                      const pieceDepth = selected.type === 'backsplash' ? selected.height : selected.depth;
+                      const newCutout = createCutoutFromPreset(e.target.value, selected.length, pieceDepth);
+                      if (newCutout) {
+                        const currentCutouts = selected.cutouts || [];
+                        if (currentCutouts.length >= 6) {
+                          alert('⚠️ Atenție: Piesa are deja 6 decupaje. Mai multe decupaje pot compromite integritatea structurală.');
+                        }
+                        updateElement(selected.id, { cutouts: [...currentCutouts, newCutout] });
+                      }
+                    }}
+                    style={{ ...inputStyle, padding: '8px', width: '100%' }}
+                  >
+                    <option value="">+ Adaugă decupaj...</option>
+                    {selected.type === 'island' && (
+                      <optgroup label="🚰 Chiuvete">
+                        <option value="sink-single">Chiuvetă simplă (50×40cm)</option>
+                        <option value="sink-double">Chiuvetă dublă (80×45cm)</option>
+                        <option value="sink-round">Chiuvetă rotundă (Ø44cm)</option>
+                        <option value="tap-32">Baterie Ø32mm</option>
+                      </optgroup>
+                    )}
+                    {selected.type === 'island' && (
+                      <optgroup label="🔥 Plite">
+                        <option value="hob-60">Plită 60cm (56×49cm)</option>
+                        <option value="hob-70">Plită 70cm (65×49cm)</option>
+                        <option value="hob-80">Plită 80cm (75×49cm)</option>
+                        <option value="hob-90">Plită 90cm (85×49cm)</option>
+                      </optgroup>
+                    )}
+                    <optgroup label="🔌 Prize">
+                      <option value="outlet-single">Priză simplă (8×8cm)</option>
+                      <option value="outlet-double">Priză dublă (15×8cm)</option>
+                      <option value="outlet-triple">Priză triplă (22×8cm)</option>
+                    </optgroup>
+                    <optgroup label="⭕ Găuri">
+                      <option value="hole-3">Gaură Ø3cm (cablu)</option>
+                      <option value="hole-5">Gaură Ø5cm (racord)</option>
+                      <option value="hole-8">Gaură Ø8cm (robinet)</option>
+                    </optgroup>
+                    <optgroup label="📐 Custom">
+                      <option value="custom-rect">Dreptunghi custom</option>
+                      <option value="custom-circle">Cerc custom</option>
+                    </optgroup>
+                  </select>
+                </div>
+
+                {/* Cutouts List */}
+                {(selected.cutouts || []).length === 0 ? (
+                  <div style={{ fontSize: '11px', color: '#555', textAlign: 'center', padding: '10px' }}>
+                    Niciun decupaj adăugat
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {(selected.cutouts || []).map((cutout, cutoutIndex) => {
+                      const pieceDepth = selected.type === 'backsplash' ? selected.height : selected.depth;
+                      const userInput = cutoutCenterToUserInput(cutout, selected.length, pieceDepth);
+                      const validation = validateCutout(cutout, selected.length, pieceDepth, selected.cutouts || []);
+                      const preset = CUTOUT_PRESETS[cutout.preset];
+                      const icon = preset?.icon || (cutout.type === 'circle' ? '⭕' : '⬜');
+                      
+                      return (
+                        <div key={cutout.id} style={{
+                          padding: '10px',
+                          background: '#1a1a1a',
+                          borderRadius: '4px',
+                          border: `1px solid ${validation.errors.length > 0 ? '#c96262' : (validation.warnings.length > 0 ? '#c9a962' : '#2a2a2a')}`
+                        }}>
+                          {/* Header */}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 500 }}>
+                              {icon} {cutout.name}
+                            </div>
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Ștergi decupajul "${cutout.name}"?`)) {
+                                  const newCutouts = (selected.cutouts || []).filter(c => c.id !== cutout.id);
+                                  updateElement(selected.id, { cutouts: newCutouts });
+                                }
+                              }}
+                              style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}
+                            >×</button>
+                          </div>
+
+                          {/* Dimensions */}
+                          {cutout.type === 'circle' ? (
+                            <div style={{ marginBottom: '8px' }}>
+                              <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Diametru (cm)</label>
+                              <NumericInput
+                                value={(cutout.radius || 0) * 2}
+                                onChange={v => {
+                                  const newCutouts = [...(selected.cutouts || [])];
+                                  newCutouts[cutoutIndex] = { ...cutout, radius: v / 2 };
+                                  updateElement(selected.id, { cutouts: newCutouts });
+                                }}
+                                min={1}
+                                step={0.5}
+                                style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                              />
+                            </div>
+                          ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px' }}>
+                              <div>
+                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Lățime (cm)</label>
+                                <NumericInput
+                                  value={cutout.width || 0}
+                                  onChange={v => {
+                                    const newCutouts = [...(selected.cutouts || [])];
+                                    newCutouts[cutoutIndex] = { ...cutout, width: v };
+                                    // Recalculate center to keep corner position stable
+                                    const oldUserInput = cutoutCenterToUserInput(cutout, selected.length, pieceDepth);
+                                    const newCenter = cutoutUserInputToCenter(oldUserInput.cotaStanga, oldUserInput.cotaFata, { ...cutout, width: v }, selected.length, pieceDepth);
+                                    newCutouts[cutoutIndex].center = newCenter;
+                                    updateElement(selected.id, { cutouts: newCutouts });
+                                  }}
+                                  min={1}
+                                  step={1}
+                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Lungime (cm)</label>
+                                <NumericInput
+                                  value={cutout.height || 0}
+                                  onChange={v => {
+                                    const newCutouts = [...(selected.cutouts || [])];
+                                    newCutouts[cutoutIndex] = { ...cutout, height: v };
+                                    // Recalculate center to keep corner position stable
+                                    const oldUserInput = cutoutCenterToUserInput(cutout, selected.length, pieceDepth);
+                                    const newCenter = cutoutUserInputToCenter(oldUserInput.cotaStanga, oldUserInput.cotaFata, { ...cutout, height: v }, selected.length, pieceDepth);
+                                    newCutouts[cutoutIndex].center = newCenter;
+                                    updateElement(selected.id, { cutouts: newCutouts });
+                                  }}
+                                  min={1}
+                                  step={1}
+                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                />
+                              </div>
+                              {cutout.type === 'rectangle' && (
+                                <div style={{ gridColumn: '1 / -1' }}>
+                                  <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Colțuri rotunjite (cm)</label>
+                                  <NumericInput
+                                    value={cutout.cornerRadius || 0}
+                                    onChange={v => {
+                                      const newCutouts = [...(selected.cutouts || [])];
+                                      newCutouts[cutoutIndex] = { ...cutout, cornerRadius: v };
+                                      updateElement(selected.id, { cutouts: newCutouts });
+                                    }}
+                                    min={0}
+                                    max={Math.min((cutout.width || 0) / 2, (cutout.height || 0) / 2)}
+                                    step={0.5}
+                                    style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Position - User friendly (from left edge) */}
+                          <div style={{ marginBottom: '8px', paddingTop: '8px', borderTop: '1px solid #2a2a2a' }}>
+                            <label style={{ fontSize: '9px', color: '#888', display: 'block', marginBottom: '4px' }}>
+                              Poziție {cutout.type === 'circle' ? '(centru)' : '(colț stânga-față)'}
+                            </label>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                              <div>
+                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>De la stânga (cm)</label>
+                                <NumericInput
+                                  value={Math.round(userInput.cotaStanga * 10) / 10}
+                                  onChange={v => {
+                                    const newCenter = cutoutUserInputToCenter(v, userInput.cotaFata, cutout, selected.length, pieceDepth);
+                                    const newCutouts = [...(selected.cutouts || [])];
+                                    newCutouts[cutoutIndex] = { ...cutout, center: newCenter };
+                                    updateElement(selected.id, { cutouts: newCutouts });
+                                  }}
+                                  min={0}
+                                  max={selected.length}
+                                  step={1}
+                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>De la față (cm)</label>
+                                <NumericInput
+                                  value={Math.round(userInput.cotaFata * 10) / 10}
+                                  onChange={v => {
+                                    const newCenter = cutoutUserInputToCenter(userInput.cotaStanga, v, cutout, selected.length, pieceDepth);
+                                    const newCutouts = [...(selected.cutouts || [])];
+                                    newCutouts[cutoutIndex] = { ...cutout, center: newCenter };
+                                    updateElement(selected.id, { cutouts: newCutouts });
+                                  }}
+                                  min={0}
+                                  max={pieceDepth}
+                                  step={1}
+                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Edge distances display */}
+                          <div style={{ fontSize: '9px', color: '#666', padding: '6px', background: '#111', borderRadius: '3px', marginBottom: validation.errors.length > 0 || validation.warnings.length > 0 ? '8px' : 0 }}>
+                            📏 Distanțe margini: 
+                            <span style={{ color: validation.edges.stanga < 5 ? '#c96262' : '#888' }}> St:{validation.edges.stanga.toFixed(1)}</span> |
+                            <span style={{ color: validation.edges.dreapta < 5 ? '#c96262' : '#888' }}> Dr:{validation.edges.dreapta.toFixed(1)}</span> |
+                            <span style={{ color: validation.edges.fata < 5 ? '#c96262' : '#888' }}> Față:{validation.edges.fata.toFixed(1)}</span> |
+                            <span style={{ color: validation.edges.spate < 5 ? '#c96262' : '#888' }}> Spate:{validation.edges.spate.toFixed(1)}</span>
+                          </div>
+
+                          {/* Errors */}
+                          {validation.errors.length > 0 && (
+                            <div style={{ fontSize: '10px', color: '#c96262', padding: '6px', background: 'rgba(201,98,98,0.1)', borderRadius: '3px', marginBottom: validation.warnings.length > 0 ? '4px' : 0 }}>
+                              ⛔ {validation.errors.join('; ')}
+                            </div>
+                          )}
+
+                          {/* Warnings */}
+                          {validation.warnings.length > 0 && (
+                            <div style={{ fontSize: '10px', color: '#c9a962', padding: '6px', background: 'rgba(201,169,98,0.1)', borderRadius: '3px' }}>
+                              ⚠️ {validation.warnings.join('; ')}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Cutouts limit warning */}
+                {(selected.cutouts || []).length >= 6 && (
+                  <div style={{ fontSize: '10px', color: '#c96262', padding: '8px', background: 'rgba(201,98,98,0.1)', borderRadius: '4px', marginTop: '8px', textAlign: 'center' }}>
+                    ⚠️ Limită de 6 decupaje atinsă - risc de pierdere integritate structurală
+                  </div>
+                )}
+              </div>
+
               {/* Actions */}
               <div style={{ display: 'flex', gap: '8px', paddingTop: '12px', borderTop: '1px solid #2a2a2a' }}>
                 <button onClick={() => duplicateElement(selected.id)} style={{ ...secondaryBtnStyle, flex: 1, padding: '10px', fontSize: '11px' }}>📋 Duplică</button>
@@ -5149,6 +6229,22 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
   
   const totalArea = pieces.reduce((s, p) => s + p.w * p.h / 10000, 0);
   const exceedingPieces = pieces.filter(p => p.exceeds);
+  
+  // Check for cutout errors across all elements
+  const cutoutErrors = [];
+  elements.forEach(el => {
+    if (el.cutouts && el.cutouts.length > 0) {
+      const pieceDepth = el.type === 'backsplash' ? el.height : el.depth;
+      el.cutouts.forEach(cutout => {
+        const validation = validateCutout(cutout, el.length, pieceDepth, el.cutouts);
+        if (!validation.valid) {
+          cutoutErrors.push({ element: el.name, cutout: cutout.name, errors: validation.errors });
+        }
+      });
+    }
+  });
+  const hasCutoutErrors = cutoutErrors.length > 0;
+  
   const count = tiles.length;
   
   // Calculate length totals for blaturi (slabs) and contrablaturi (backsplashes)
@@ -5243,9 +6339,22 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
         const color = getColorById(p.colorId);
         const materialType = getMaterialType(p.colorId);
         const materialTypeObj = library.materialTypes.find(mt => mt.id === materialType);
+        const element = elements.find(e => e.id === p.elementId);
+        
+        // Format cutouts for email
+        const cutoutsData = element?.cutouts?.map(c => {
+          const pieceDepth = element.type === 'backsplash' ? element.height : element.depth;
+          const userInput = cutoutCenterToUserInput(c, element.length, pieceDepth);
+          if (c.type === 'circle') {
+            return `${c.name} Ø${(c.radius || 0) * 2}cm la ${Math.round(userInput.cotaStanga)}cm de stânga, ${Math.round(userInput.cotaFata)}cm de față`;
+          } else {
+            return `${c.name} ${c.width}×${c.height}cm la ${Math.round(userInput.cotaStanga)}cm de stânga, ${Math.round(userInput.cotaFata)}cm de față`;
+          }
+        }) || [];
         
         return {
           number: p.pieceNumber,
+          name: p.name,
           type: p.pieceType === 'slab' ? 'island' : 'backsplash',
           // Use pieceW and pieceH which are the actual dimensions on tile after rotation
           width: p.pieceW,
@@ -5253,6 +6362,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
           materialType: materialTypeObj?.name || materialType || '-',
           colorName: color?.name || 'N/A',
           thickness: p.thickness || '-',
+          cutouts: cutoutsData,
         };
       });
       
@@ -5603,6 +6713,91 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                 fontWeight: (shouldHighlight || exceeds) ? 600 : 500,
                                 textShadow: '0 0 2px rgba(0,0,0,0.8)',
                               }}>
+                                {/* Render cutouts as dark overlays */}
+                                {pieceElement?.cutouts?.map((cutout, cutIdx) => {
+                                  // Get piece dimensions in cm
+                                  const pieceLengthCm = pieceElement.length;
+                                  const pieceDepthCm = pieceElement.type === 'backsplash' ? pieceElement.height : pieceElement.depth;
+                                  
+                                  // Convert cutout center from internal coords to user coords (from corner)
+                                  const userInput = cutoutCenterToUserInput(cutout, pieceLengthCm, pieceDepthCm);
+                                  
+                                  // Check if piece is rotated on tile (pieceW/H might be swapped)
+                                  const isRotatedOnTile = p.rotated;
+                                  
+                                  let cutLeftPx, cutTopPx, cutWPx, cutHPx;
+                                  
+                                  if (cutout.type === 'circle') {
+                                    const diameterCm = (cutout.radius || 0) * 2;
+                                    if (isRotatedOnTile) {
+                                      // Rotated 90° CW: x->y, y->width-x
+                                      cutLeftPx = userInput.cotaFata * uniformScale - (cutout.radius || 0) * uniformScale;
+                                      cutTopPx = (pieceLengthCm - userInput.cotaStanga) * uniformScale - (cutout.radius || 0) * uniformScale;
+                                      cutWPx = diameterCm * uniformScale;
+                                      cutHPx = diameterCm * uniformScale;
+                                    } else {
+                                      cutLeftPx = (userInput.cotaStanga - (cutout.radius || 0)) * uniformScale;
+                                      cutTopPx = (userInput.cotaFata - (cutout.radius || 0)) * uniformScale;
+                                      cutWPx = diameterCm * uniformScale;
+                                      cutHPx = diameterCm * uniformScale;
+                                    }
+                                    
+                                    return (
+                                      <div
+                                        key={cutIdx}
+                                        style={{
+                                          position: 'absolute',
+                                          left: cutLeftPx,
+                                          top: cutTopPx,
+                                          width: cutWPx,
+                                          height: cutHPx,
+                                          borderRadius: '50%',
+                                          background: 'rgba(30, 30, 30, 0.85)',
+                                          border: '1px solid #444',
+                                          pointerEvents: 'none',
+                                        }}
+                                        title={cutout.name}
+                                      />
+                                    );
+                                  } else {
+                                    // Rectangle
+                                    const cutW = cutout.width || 0;
+                                    const cutH = cutout.height || 0;
+                                    const cornerR = (cutout.cornerRadius || 0) * uniformScale;
+                                    
+                                    if (isRotatedOnTile) {
+                                      // Rotated 90° CW
+                                      cutLeftPx = userInput.cotaFata * uniformScale;
+                                      cutTopPx = (pieceLengthCm - userInput.cotaStanga - cutW) * uniformScale;
+                                      cutWPx = cutH * uniformScale;
+                                      cutHPx = cutW * uniformScale;
+                                    } else {
+                                      cutLeftPx = userInput.cotaStanga * uniformScale;
+                                      cutTopPx = userInput.cotaFata * uniformScale;
+                                      cutWPx = cutW * uniformScale;
+                                      cutHPx = cutH * uniformScale;
+                                    }
+                                    
+                                    return (
+                                      <div
+                                        key={cutIdx}
+                                        style={{
+                                          position: 'absolute',
+                                          left: cutLeftPx,
+                                          top: cutTopPx,
+                                          width: cutWPx,
+                                          height: cutHPx,
+                                          borderRadius: cornerR,
+                                          background: 'rgba(30, 30, 30, 0.85)',
+                                          border: '1px solid #444',
+                                          pointerEvents: 'none',
+                                        }}
+                                        title={cutout.name}
+                                      />
+                                    );
+                                  }
+                                })}
+                                
                                 {/* Joint edge indicators */}
                                 {shouldHighlight && (isLeftWaterfall || isRightWaterfall) && (
                                   <div style={{
@@ -5676,22 +6871,28 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
         <button 
           onClick={() => setShowConfirmDialog(true)}
-          disabled={sendingQuote}
+          disabled={sendingQuote || hasCutoutErrors}
           style={{ 
             padding: '14px 28px', 
-            background: sendingQuote ? '#1a1a1a' : 'transparent', 
-            border: '1px solid #c9a962',
-            color: '#c9a962', 
+            background: (sendingQuote || hasCutoutErrors) ? '#1a1a1a' : 'transparent', 
+            border: `1px solid ${hasCutoutErrors ? '#c96262' : '#c9a962'}`,
+            color: hasCutoutErrors ? '#c96262' : '#c9a962', 
             fontWeight: 600, 
-            cursor: sendingQuote ? 'wait' : 'pointer',
+            cursor: (sendingQuote || hasCutoutErrors) ? 'not-allowed' : 'pointer',
             flexShrink: 0,
             fontSize: '13px',
-            opacity: sendingQuote ? 0.7 : 1,
+            opacity: (sendingQuote || hasCutoutErrors) ? 0.7 : 1,
             transition: 'all 0.2s ease',
           }}
+          title={hasCutoutErrors ? 'Corectează erorile la decupaje înainte de a trimite oferta' : ''}
         >
-          {sendingQuote ? '⏳ Se trimite...' : 'Solicită Ofertă'}
+          {sendingQuote ? '⏳ Se trimite...' : (hasCutoutErrors ? '⛔ Erori decupaje' : 'Solicită Ofertă')}
         </button>
+        {hasCutoutErrors && (
+          <div style={{ fontSize: '10px', color: '#c96262', textAlign: 'center', maxWidth: '150px' }}>
+            Corectează {cutoutErrors.length} eroare{cutoutErrors.length > 1 ? '' : ''} la decupaje
+          </div>
+        )}
         {quoteStatus === 'success' && (
           <div style={{ fontSize: '11px', color: '#4a9', textAlign: 'center' }}>
             ✓ Cererea a fost trimisă!
