@@ -475,7 +475,8 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
         }
       } else {
         // Slab: top face has local normal pointing in +Y direction
-        isMainFace = vLocalNormal.y > 0.5;
+        // Use more permissive check because ExtrudeGeometry normals may not be exactly (0,1,0)
+        isMainFace = vLocalNormal.y > 0.3 && abs(vLocalNormal.x) < 0.5 && abs(vLocalNormal.z) < 0.5;
         
         if (isMainFace) {
           // Project from Y axis - X is length, Z is depth
@@ -4329,6 +4330,22 @@ function Configurator({ project, onBack }) {
   useEffect(() => {
     if (!sceneRef.current) return;
 
+    // Clean up scene-level debug tile helpers from previous render
+    const sceneHelpersToRemove = [];
+    sceneRef.current.traverse((child) => {
+      if (child.userData?.isDebugTileHelper) {
+        sceneHelpersToRemove.push(child);
+      }
+    });
+    sceneHelpersToRemove.forEach((helper) => {
+      sceneRef.current.remove(helper);
+      if (helper.geometry) helper.geometry.dispose();
+      if (helper.material) {
+        if (helper.material.map) helper.material.map.dispose();
+        helper.material.dispose();
+      }
+    });
+
     const currentIds = new Set(elements.map(el => el.id));
     const prevIds = new Set(Object.keys(prevElementsRef.current));
     
@@ -4818,59 +4835,52 @@ function Configurator({ project, onBack }) {
         const pieceCenterOnTileX = pieceX + pieceW / 2;
         const pieceCenterOnTileY = pieceY + pieceH / 2;
         
-        // Offset in packer coordinates
-        let offsetPackerX = tileCenterX - pieceCenterOnTileX;
-        let offsetPackerY = tileCenterY - pieceCenterOnTileY;
+        // Offset from piece center to tile center (in packer/tile coordinates)
+        const offsetTileX = tileCenterX - pieceCenterOnTileX;
+        const offsetTileY = tileCenterY - pieceCenterOnTileY;
         
-        // Convert to 3D local space
-        // For slab: packer X -> 3D X, packer Y -> 3D -Z (because packer Y down = 3D Z forward, but we view from above)
-        // Actually, let's think about it differently:
-        // - In packer, Y=0 is top (back of counter), Y=max is bottom (front of counter)
-        // - In 3D top view, Z=negative is back, Z=positive is front
-        // - So packer Y maps to 3D Z directly (both increase toward front/viewer)
+        // For tile helper, we'll add it to SCENE (not mesh) and position in world space
+        // This avoids issues with piece rotation affecting the helper
+        // Get piece world position
+        const pieceWorldPos = new THREE.Vector3();
+        mesh.getWorldPosition(pieceWorldPos);
         
-        let offset3dX, offset3dZ;
-        
-        if (isRotatedOnTile) {
-          // When piece is rotated on tile:
-          // - Piece's mesh X (length) is placed along tile's Y direction
-          // - Piece's mesh Z (depth) is placed along tile's X direction
-          // So we need to swap the offsets
-          offset3dX = -offsetPackerY;  // Tile Y offset -> 3D X (negated due to rotation direction)
-          offset3dZ = offsetPackerX;   // Tile X offset -> 3D Z
-        } else {
-          // Normal orientation
-          offset3dX = offsetPackerX;
-          offset3dZ = offsetPackerY;
-        }
+        // Calculate tile center world position
+        // Tile coordinates: X is horizontal, Y is vertical (top-down view)
+        // 3D world for slab: X is horizontal, Z is depth (front-back)
+        // For non-rotated: tile X -> world X, tile Y -> world Z
+        // For rotated: the piece is rotated 90°, but tile helper should still show full tile in world orientation
         
         // Create tile geometry - use BoxGeometry like pieces for consistent normals
+        // Tile helper should show the FULL tile texture at correct position
+        // It's a child of the piece mesh, so it inherits piece rotation
         let tileGeo;
         if (isBacksplash) {
-          // Thin box for backsplash
-          tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.001);
+          // Thin box for backsplash (X=width, Y=height, Z=thickness)
+          tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.01);
         } else {
-          // Thin box for slab (width, thickness, depth)
-          // When piece is rotated, the tile helper should also be rotated to match texture orientation
+          // Thin box for slab (X=width, Y=thickness, Z=depth)
+          // Use 0.01m thickness for better normal detection
           if (isRotatedOnTile) {
-            // Rotated: tile's X becomes 3D Z, tile's Y becomes 3D X
-            tileGeo = new THREE.BoxGeometry(tileH, 0.001, tileW);
+            // When piece is rotated, swap tile dimensions for helper
+            tileGeo = new THREE.BoxGeometry(tileH, 0.01, tileW);
           } else {
-            tileGeo = new THREE.BoxGeometry(tileW, 0.001, tileH);
+            tileGeo = new THREE.BoxGeometry(tileW, 0.01, tileH);
           }
         }
         
         // Create layout info for the FULL TILE (offset 0, scale 1)
+        // Match the piece's rotation state so shader applies same UV transform
         const fullTileLayoutInfo = {
           x: 0,
           y: 0,
-          w: layoutInfo.tileW,  // Full tile width in cm
-          h: layoutInfo.tileH,  // Full tile height in cm
+          w: isRotatedOnTile ? layoutInfo.tileH : layoutInfo.tileW,  // Swap if rotated
+          h: isRotatedOnTile ? layoutInfo.tileW : layoutInfo.tileH,  // Swap if rotated
           pieceW: layoutInfo.tileW,
           pieceH: layoutInfo.tileH,
           tileW: layoutInfo.tileW,
           tileH: layoutInfo.tileH,
-          grainLengthwise: isRotatedOnTile ? false : true  // Match piece rotation
+          grainLengthwise: !isRotatedOnTile  // Match piece rotation
         };
         
         // Load texture and create material using same shader
@@ -4885,12 +4895,30 @@ function Configurator({ project, onBack }) {
         const tileMesh = new THREE.Mesh(tileGeo, tileMat);
         tileMesh.renderOrder = -1;
         
-        // Position tile helper relative to piece in local space
+        // Position tile helper in WORLD space
+        // Tile helper shows the full tile, positioned so the piece's region aligns
         if (isBacksplash) {
-          tileMesh.position.set(offset3dX, -offset3dZ, -0.002);
+          // Backsplash: X=width, Y=height, Z=position
+          tileMesh.position.set(
+            pieceWorldPos.x + offsetTileX,
+            pieceWorldPos.y - offsetTileY,  // Tile Y maps to world Y for backsplash
+            pieceWorldPos.z - 0.002
+          );
         } else {
-          tileMesh.position.set(offset3dX, -0.002, offset3dZ);
+          // Slab: X=width, Y=up, Z=depth
+          tileMesh.position.set(
+            pieceWorldPos.x + offsetTileX,
+            pieceWorldPos.y - 0.002,
+            pieceWorldPos.z + offsetTileY  // Tile Y maps to world Z for slab
+          );
         }
+        
+        // Add to SCENE, not mesh - so it doesn't inherit piece rotation
+        sceneRef.current.add(tileMesh);
+        
+        // Store reference for cleanup
+        tileMesh.userData.isDebugTileHelper = true;
+        tileMesh.userData.parentElementId = el.id;
         
         textureLoader.load(colorData.texture, (texture) => {
           texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -4900,8 +4928,13 @@ function Configurator({ project, onBack }) {
           // Use same triplanar material as pieces, but for full tile with 50% opacity
           const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false, 0.5);
           
+          tileMesh.material.dispose(); // Clean up old material
           tileMesh.material = tileTriplanarMat;
-          tileMesh.material.needsUpdate = true;
+          
+          // Force a re-render
+          if (rendererRef.current && sceneRef.current && cameraRef.current) {
+            rendererRef.current.render(sceneRef.current, cameraRef.current);
+          }
         });
         
         // Add cyan wireframe border
@@ -4914,9 +4947,6 @@ function Configurator({ project, onBack }) {
         const tileOutline = new THREE.LineSegments(tileEdges, tileLineMat);
         tileOutline.renderOrder = 999;
         tileMesh.add(tileOutline);
-        
-        tileMesh.userData.isDebugTileHelper = true;
-        mesh.add(tileMesh);
       }
     });
     
