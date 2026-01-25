@@ -492,72 +492,22 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
         vec2 tileUV = uPieceOffset + uv * uPieceScale;
         
         if (uDebugMode) {
-          // DEBUG MODE v3: Show REAL SCALE tile texture
-          // 
-          // The piece samples tileUV which goes from uPieceOffset to uPieceOffset+uPieceScale
-          // as uv goes from 0 to 1 across the piece.
-          //
-          // To visualize where the piece sits on the full tile:
-          // - tileUV is already the correct coordinate on the tile (0-1 = full tile)
-          // - We sample the texture at tileUV
-          // - We show tile edges where tileUV = 0 or 1
-          // - We show piece edges where uv = 0 or 1
-          //
-          // Example: piece at offset (0.1, 0.2) with scale (0.3, 0.4)
-          // - At piece corner uv=(0,0): tileUV = (0.1, 0.2)
-          // - At piece corner uv=(1,1): tileUV = (0.4, 0.6)
-          // - Tile edge tileUV.x=0 would be at uv.x = -0.1/0.3 = -0.33 (outside piece)
-          // - Tile edge tileUV.x=1 would be at uv.x = (1-0.1)/0.3 = 3.0 (outside piece)
+          // DEBUG MODE: Show piece texture with gold border
+          // The actual tile visualization is done with a separate helper mesh
           
-          // Sample texture at the correct tile position
           vec4 texColor = texture2D(uTexture, tileUV);
           
-          // Is this point inside the tile? (tileUV between 0 and 1)
-          bool insideTile = tileUV.x >= 0.0 && tileUV.x <= 1.0 && 
-                            tileUV.y >= 0.0 && tileUV.y <= 1.0;
+          // Border at piece edges
+          float borderW = 0.02;
+          bool atPieceBorder = uv.x < borderW || uv.x > 1.0 - borderW || 
+                               uv.y < borderW || uv.y > 1.0 - borderW;
           
-          // Calculate where tile edges appear in piece UV space
-          // tileUV = uPieceOffset + uv * uPieceScale
-          // So: uv = (tileUV - uPieceOffset) / uPieceScale
-          // Tile edge at tileUV=0: uv = -uPieceOffset / uPieceScale
-          // Tile edge at tileUV=1: uv = (1 - uPieceOffset) / uPieceScale
-          
-          vec2 tileStartInPieceUV = -uPieceOffset / uPieceScale;
-          vec2 tileEndInPieceUV = (vec2(1.0) - uPieceOffset) / uPieceScale;
-          
-          // Border thickness in UV space
-          float borderW = 0.015;
-          
-          // Check if at piece border (gold) - where uv = 0 or 1
-          bool atPieceLeft = uv.x < borderW;
-          bool atPieceRight = uv.x > 1.0 - borderW;
-          bool atPieceBottom = uv.y < borderW;
-          bool atPieceTop = uv.y > 1.0 - borderW;
-          bool atPieceBorder = atPieceLeft || atPieceRight || atPieceBottom || atPieceTop;
-          
-          // Check if at tile border (cyan) - where tileUV = 0 or 1
-          // These might be inside or outside the piece depending on piece position
-          float tileBorderW = 0.01;
-          bool atTileLeft = abs(tileUV.x) < tileBorderW;
-          bool atTileRight = abs(tileUV.x - 1.0) < tileBorderW;
-          bool atTileBottom = abs(tileUV.y) < tileBorderW;
-          bool atTileTop = abs(tileUV.y - 1.0) < tileBorderW;
-          bool atTileBorder = atTileLeft || atTileRight || atTileBottom || atTileTop;
-          
-          // Color output
           if (atPieceBorder) {
             // GOLD border = piece edges
             gl_FragColor = vec4(0.79, 0.66, 0.38, 1.0);
-          } else if (atTileBorder && insideTile) {
-            // CYAN border = tile edges (only if visible within tile)
-            gl_FragColor = vec4(0.0, 0.9, 0.9, 1.0);
-          } else if (insideTile) {
-            // Inside tile: show texture
-            gl_FragColor = texColor;
           } else {
-            // Outside tile: checkerboard pattern to show "no texture here"
-            float checker = mod(floor(uv.x * 8.0) + floor(uv.y * 8.0), 2.0);
-            gl_FragColor = vec4(vec3(0.15 + checker * 0.1), 0.8);
+            // Show texture with slight transparency so tile helper shows through
+            gl_FragColor = vec4(texColor.rgb, 0.9);
           }
         } else {
           gl_FragColor = texture2D(uTexture, tileUV);
@@ -4724,6 +4674,97 @@ function Configurator({ project, onBack }) {
 
       sceneRef.current.add(mesh);
       meshesRef.current[el.id] = mesh;
+      
+      // DEBUG MODE: Create a helper mesh showing the FULL TILE at real scale
+      // This tile mesh is positioned so the piece overlaps exactly where it should be on the tile
+      if (debugTexture && layoutInfo && colorData.texture) {
+        const tileW = layoutInfo.tileW / 100; // tile width in meters (e.g., 3.2m for 320cm)
+        const tileH = layoutInfo.tileH / 100; // tile height in meters (e.g., 1.6m for 160cm)
+        
+        // Piece position on tile (in meters, from tile origin at top-left)
+        const pieceX = layoutInfo.x / 100; // piece X offset on tile
+        const pieceY = layoutInfo.y / 100; // piece Y offset on tile
+        const pieceW = layoutInfo.pieceW / 100; // piece width on tile
+        const pieceH = layoutInfo.pieceH / 100; // piece height on tile
+        
+        // The piece mesh is centered at (0,0) in local coords
+        // On the tile, the piece occupies from (pieceX, pieceY) to (pieceX+pieceW, pieceY+pieceH)
+        // 
+        // We need to position the tile so that when the piece is at its world position,
+        // the tile's texture aligns correctly.
+        //
+        // Tile center offset from piece center:
+        // Piece center on tile: (pieceX + pieceW/2, pieceY + pieceH/2)
+        // Tile center: (tileW/2, tileH/2)
+        // Offset: tileCenter - pieceCenter
+        
+        const pieceCenterOnTileX = pieceX + pieceW / 2;
+        const pieceCenterOnTileY = pieceY + pieceH / 2;
+        const tileCenterX = tileW / 2;
+        const tileCenterY = tileH / 2;
+        
+        // Offset from piece center to tile center (in tile's local coordinate system)
+        const offsetX = tileCenterX - pieceCenterOnTileX;
+        const offsetZ = tileCenterY - pieceCenterOnTileY; // Y on tile maps to Z in 3D for slab
+        
+        // Create tile geometry
+        const isBacksplash = el.type === 'backsplash';
+        let tileGeo;
+        if (isBacksplash) {
+          tileGeo = new THREE.PlaneGeometry(tileW, tileH);
+        } else {
+          tileGeo = new THREE.PlaneGeometry(tileW, tileH);
+          tileGeo.rotateX(-Math.PI / 2); // Lay flat for slab
+        }
+        
+        // Create tile material with full texture and transparency
+        const tileMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.5,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        
+        // Load texture for the tile helper
+        const textureLoader = new THREE.TextureLoader();
+        textureLoader.load(colorData.texture, (texture) => {
+          texture.wrapS = THREE.ClampToEdgeWrapping;
+          texture.wrapT = THREE.ClampToEdgeWrapping;
+          tileMat.map = texture;
+          tileMat.needsUpdate = true;
+        });
+        
+        const tileMesh = new THREE.Mesh(tileGeo, tileMat);
+        tileMesh.renderOrder = -1; // Render behind the piece
+        
+        // Position the tile mesh relative to the piece
+        // The piece is at world position, we offset the tile so it aligns
+        if (isBacksplash) {
+          // For backsplash: offset in X and Y
+          tileMesh.position.set(offsetX, -offsetZ, -0.001); // Slightly behind
+        } else {
+          // For slab: offset in X and Z, slightly below
+          tileMesh.position.set(offsetX, -0.001, offsetZ);
+        }
+        
+        // Add wireframe border to show tile edges
+        const tileEdges = new THREE.EdgesGeometry(tileGeo);
+        const tileLineMat = new THREE.LineBasicMaterial({ 
+          color: 0x00ffff, // Cyan
+          linewidth: 2,
+          depthTest: false,
+        });
+        const tileOutline = new THREE.LineSegments(tileEdges, tileLineMat);
+        tileOutline.renderOrder = 999;
+        tileMesh.add(tileOutline);
+        
+        // Mark as debug helper so we can identify it later
+        tileMesh.userData.isDebugTileHelper = true;
+        
+        // Add tile as child of the piece mesh so it moves/rotates with it
+        mesh.add(tileMesh);
+      }
     });
     
     // Update prevElementsRef with current state including selection
