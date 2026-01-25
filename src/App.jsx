@@ -375,11 +375,13 @@ function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [],
 /**
  * Creates a triplanar shader material for proper texture mapping
  * Uses LOCAL coordinates so texture stays fixed when piece is rotated/moved
+ * Handles grainLengthwise rotation (90° UV rotation when piece is rotated on tile)
+ * Applies texture only on top/front face, solid color on sides
  * 
  * @param {THREE.Texture} texture - The texture to apply
  * @param {Object} layoutInfo - Layout info with tile/piece positions
  * @param {boolean} isBacksplash - If true, project from Z axis, else from Y
- * @param {THREE.Color} fallbackColor - Color to use if no texture
+ * @param {THREE.Color} fallbackColor - Color to use for sides/back
  */
 function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor) {
   if (!texture || !layoutInfo) {
@@ -387,68 +389,105 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   }
   
   // Calculate UV offset and scale based on piece position on tile
-  // layoutInfo contains: x, y (position on tile in cm), pieceW, pieceH, tileW, tileH
-  const tileW = layoutInfo.tileW; // Keep in cm for UV calculation
+  const tileW = layoutInfo.tileW;
   const tileH = layoutInfo.tileH;
-  const pieceX = layoutInfo.x; // Position on tile in cm
+  const pieceX = layoutInfo.x;
   const pieceY = layoutInfo.y;
-  const pieceW = layoutInfo.pieceW; // Piece dimensions in cm
+  const pieceW = layoutInfo.pieceW;
   const pieceH = layoutInfo.pieceH;
   
-  // UV offset: where the piece starts on the tile (0-1 range)
+  // Check if piece is rotated on tile (grainLengthwise = false means rotated 90°)
+  const isRotatedOnTile = layoutInfo.grainLengthwise === false;
+  
+  // UV offset and scale
   const uvOffsetX = pieceX / tileW;
   const uvOffsetY = pieceY / tileH;
-  
-  // UV scale: how much of the tile texture this piece uses
   const uvScaleX = pieceW / tileW;
   const uvScaleY = pieceH / tileH;
   
-  // Piece size in meters (for local coordinate normalization)
-  const pieceSizeX = pieceW / 100;
-  const pieceSizeY = pieceH / 100;
+  // Piece size in meters for local coordinate normalization
+  // When rotated, the piece's local X maps to tile Y and vice versa
+  const pieceSizeX = (isRotatedOnTile ? layoutInfo.h : layoutInfo.w) / 100;
+  const pieceSizeY = (isRotatedOnTile ? layoutInfo.w : layoutInfo.h) / 100;
   
   const vertexShader = `
     varying vec3 vLocalPosition;
+    varying vec3 vNormal;
     
     void main() {
-      // Use LOCAL position (before any model transforms)
-      // This stays fixed relative to the mesh regardless of rotation/position
       vLocalPosition = position;
+      vNormal = normalize(normalMatrix * normal);
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `;
   
   const fragmentShader = `
     uniform sampler2D uTexture;
-    uniform vec2 uPieceOffset;   // Piece position on tile (0-1)
-    uniform vec2 uPieceScale;    // Piece size relative to tile (0-1)
-    uniform vec2 uPieceSize;     // Piece size in meters
+    uniform vec2 uPieceOffset;
+    uniform vec2 uPieceScale;
+    uniform vec2 uPieceSize;
     uniform bool uIsBacksplash;
+    uniform bool uIsRotatedOnTile;
+    uniform vec3 uSideColor;
     
     varying vec3 vLocalPosition;
+    varying vec3 vNormal;
     
     void main() {
       vec2 uv;
       
+      // Check if this is the top/front face (where texture should appear)
+      bool isMainFace = false;
+      
       if (uIsBacksplash) {
-        // Backsplash: vertical panel, project from Z (front)
-        // Local X = horizontal, Local Y = vertical
-        // Geometry is centered at origin, so position ranges from -size/2 to +size/2
-        uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
-        uv.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
+        // Backsplash: front face has normal pointing in -Z direction
+        isMainFace = vNormal.z < -0.5;
+        
+        if (isMainFace) {
+          // Project from Z axis
+          uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
+          uv.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
+          
+          // Apply 90° rotation if piece is rotated on tile
+          if (uIsRotatedOnTile) {
+            vec2 centered = uv - 0.5;
+            uv.x = -centered.y + 0.5;
+            uv.y = centered.x + 0.5;
+          }
+        }
       } else {
-        // Slab: horizontal panel, project from Y (top)
-        // Local X = length direction, Local Z = depth direction
-        uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
-        uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
+        // Slab: top face has normal pointing in +Y direction
+        isMainFace = vNormal.y > 0.5;
+        
+        if (isMainFace) {
+          // Project from Y axis
+          uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
+          uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
+          
+          // Apply 90° rotation if piece is rotated on tile
+          if (uIsRotatedOnTile) {
+            vec2 centered = uv - 0.5;
+            uv.x = -centered.y + 0.5;
+            uv.y = centered.x + 0.5;
+          }
+        }
       }
       
-      // Map UV from piece space (0-1) to tile texture space
-      vec2 tileUV = uPieceOffset + uv * uPieceScale;
-      
-      gl_FragColor = texture2D(uTexture, tileUV);
+      if (isMainFace) {
+        // Map UV from piece space to tile texture space
+        vec2 tileUV = uPieceOffset + uv * uPieceScale;
+        gl_FragColor = texture2D(uTexture, tileUV);
+      } else {
+        // Sides and back: solid color
+        gl_FragColor = vec4(uSideColor, 1.0);
+      }
     }
   `;
+  
+  // Calculate average color from fallback (or use a neutral gray)
+  const sideColor = fallbackColor ? 
+    new THREE.Color(fallbackColor).multiplyScalar(0.8) : 
+    new THREE.Color(0.4, 0.4, 0.4);
   
   const material = new THREE.ShaderMaterial({
     uniforms: {
@@ -456,7 +495,9 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
       uPieceOffset: { value: new THREE.Vector2(uvOffsetX, uvOffsetY) },
       uPieceScale: { value: new THREE.Vector2(uvScaleX, uvScaleY) },
       uPieceSize: { value: new THREE.Vector2(pieceSizeX, pieceSizeY) },
-      uIsBacksplash: { value: isBacksplash }
+      uIsBacksplash: { value: isBacksplash },
+      uIsRotatedOnTile: { value: isRotatedOnTile },
+      uSideColor: { value: sideColor }
     },
     vertexShader,
     fragmentShader,
