@@ -374,8 +374,7 @@ function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [],
 
 /**
  * Creates a triplanar shader material for proper texture mapping
- * This projects texture from top (Y) for slabs and from front (Z) for backsplashes
- * Works correctly regardless of geometry complexity (holes, extrusions, etc.)
+ * Uses LOCAL coordinates so texture stays fixed when piece is rotated/moved
  * 
  * @param {THREE.Texture} texture - The texture to apply
  * @param {Object} layoutInfo - Layout info with tile/piece positions
@@ -388,13 +387,13 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   }
   
   // Calculate UV offset and scale based on piece position on tile
-  // layoutInfo contains: x, y (position on tile), pieceW, pieceH, tileW, tileH
-  const tileW = layoutInfo.tileW / 100; // Convert to meters
-  const tileH = layoutInfo.tileH / 100;
-  const pieceX = layoutInfo.x / 100; // Position on tile in meters
-  const pieceY = layoutInfo.y / 100;
-  const pieceW = layoutInfo.pieceW / 100;
-  const pieceH = layoutInfo.pieceH / 100;
+  // layoutInfo contains: x, y (position on tile in cm), pieceW, pieceH, tileW, tileH
+  const tileW = layoutInfo.tileW; // Keep in cm for UV calculation
+  const tileH = layoutInfo.tileH;
+  const pieceX = layoutInfo.x; // Position on tile in cm
+  const pieceY = layoutInfo.y;
+  const pieceW = layoutInfo.pieceW; // Piece dimensions in cm
+  const pieceH = layoutInfo.pieceH;
   
   // UV offset: where the piece starts on the tile (0-1 range)
   const uvOffsetX = pieceX / tileW;
@@ -404,53 +403,48 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   const uvScaleX = pieceW / tileW;
   const uvScaleY = pieceH / tileH;
   
+  // Piece size in meters (for local coordinate normalization)
+  const pieceSizeX = pieceW / 100;
+  const pieceSizeY = pieceH / 100;
+  
   const vertexShader = `
-    varying vec3 vWorldPosition;
-    varying vec3 vNormal;
+    varying vec3 vLocalPosition;
     
     void main() {
-      vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
-      vNormal = normalize(normalMatrix * normal);
+      // Use LOCAL position (before any model transforms)
+      // This stays fixed relative to the mesh regardless of rotation/position
+      vLocalPosition = position;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `;
   
   const fragmentShader = `
     uniform sampler2D uTexture;
-    uniform vec2 uTileSize;      // Tile size in meters
     uniform vec2 uPieceOffset;   // Piece position on tile (0-1)
     uniform vec2 uPieceScale;    // Piece size relative to tile (0-1)
-    uniform vec3 uMeshCenter;    // Center of the mesh in world coords
-    uniform vec2 uMeshSize;      // Size of the mesh (width, depth/height)
+    uniform vec2 uPieceSize;     // Piece size in meters
     uniform bool uIsBacksplash;
     
-    varying vec3 vWorldPosition;
-    varying vec3 vNormal;
+    varying vec3 vLocalPosition;
     
     void main() {
       vec2 uv;
       
-      // Calculate local position relative to mesh center
-      vec3 localPos = vWorldPosition - uMeshCenter;
-      
       if (uIsBacksplash) {
-        // Backsplash: project from Z axis (front view)
-        // X = horizontal, Y = vertical
-        uv.x = (localPos.x / uMeshSize.x) + 0.5;
-        uv.y = (localPos.y / uMeshSize.y) + 0.5;
+        // Backsplash: vertical panel, project from Z (front)
+        // Local X = horizontal, Local Y = vertical
+        // Geometry is centered at origin, so position ranges from -size/2 to +size/2
+        uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
+        uv.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
       } else {
-        // Slab: project from Y axis (top view)
-        // X = horizontal (length), Z = depth
-        uv.x = (localPos.x / uMeshSize.x) + 0.5;
-        uv.y = (localPos.z / uMeshSize.y) + 0.5;
+        // Slab: horizontal panel, project from Y (top)
+        // Local X = length direction, Local Z = depth direction
+        uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
+        uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
       }
       
-      // Map UV from piece space (0-1) to tile space
-      // uv 0-1 on piece -> actual position on tile texture
+      // Map UV from piece space (0-1) to tile texture space
       vec2 tileUV = uPieceOffset + uv * uPieceScale;
-      
-      // Clamp to piece bounds to prevent bleeding
-      tileUV = clamp(tileUV, uPieceOffset, uPieceOffset + uPieceScale);
       
       gl_FragColor = texture2D(uTexture, tileUV);
     }
@@ -459,11 +453,9 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uTexture: { value: texture },
-      uTileSize: { value: new THREE.Vector2(tileW, tileH) },
       uPieceOffset: { value: new THREE.Vector2(uvOffsetX, uvOffsetY) },
       uPieceScale: { value: new THREE.Vector2(uvScaleX, uvScaleY) },
-      uMeshCenter: { value: new THREE.Vector3(0, 0, 0) }, // Will be updated
-      uMeshSize: { value: new THREE.Vector2(pieceW, pieceH) },
+      uPieceSize: { value: new THREE.Vector2(pieceSizeX, pieceSizeY) },
       uIsBacksplash: { value: isBacksplash }
     },
     vertexShader,
@@ -4395,8 +4387,6 @@ function Configurator({ project, onBack }) {
         // Load texture and create triplanar shader material
         const textureLoader = new THREE.TextureLoader();
         const isBacksplash = el.type === 'backsplash';
-        const pieceW = el.length / 100;
-        const pieceH = isBacksplash ? el.height / 100 : el.depth / 100;
         
         // Create placeholder material first
         material = new THREE.MeshBasicMaterial({ color: color });
@@ -4410,17 +4400,8 @@ function Configurator({ project, onBack }) {
           texture.magFilter = THREE.LinearFilter;
           texture.generateMipmaps = true;
           
-          // Create triplanar material
+          // Create triplanar material - uses local coords so no need to update position
           const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color);
-          
-          // Update mesh center uniform based on actual position
-          if (triplanarMat.uniforms) {
-            triplanarMat.uniforms.uMeshCenter.value.set(
-              mesh.position.x,
-              mesh.position.y,
-              mesh.position.z
-            );
-          }
           
           // Replace material on mesh
           mesh.material = triplanarMat;
@@ -4678,13 +4659,14 @@ function Configurator({ project, onBack }) {
         
         if (lengthDelta !== 0) {
           // Reposition cutouts to maintain their cotaStânga (distance from left edge)
-          // When piece grows symmetrically, center moves by delta/2
-          // To keep cotaStânga constant, we need to shift cutout center by delta/2
+          // When piece grows symmetrically, the left edge moves LEFT by delta/2
+          // So cutout center must move LEFT by delta/2 to stay at same cotaStânga
+          // center.x is relative to piece center, so we SUBTRACT delta/2
           const updatedCutouts = el.cutouts.map(cutout => ({
             ...cutout,
             center: {
               ...cutout.center,
-              x: cutout.center.x + lengthDelta / 2
+              x: cutout.center.x - lengthDelta / 2
             }
           }));
           
@@ -4701,11 +4683,12 @@ function Configurator({ project, onBack }) {
         
         if (depthDelta !== 0) {
           // Reposition cutouts to maintain their cotaFață (distance from front edge)
+          // Same logic - front edge moves forward by delta/2, so center moves by -delta/2
           const updatedCutouts = (updates.cutouts || el.cutouts).map(cutout => ({
             ...cutout,
             center: {
               ...cutout.center,
-              z: cutout.center.z + depthDelta / 2
+              z: cutout.center.z - depthDelta / 2
             }
           }));
           
