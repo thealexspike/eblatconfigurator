@@ -401,13 +401,9 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   const isRotatedOnTile = layoutInfo.grainLengthwise === false;
   
   // UV offset and scale - these define where on the tile texture this piece maps
-  // Packer uses top-left origin (Y increases downward)
-  // We need to flip Y offset because we flip uv.y in shader
-  // After flip: piece at packer Y=0 should map to texture V=1 (top of texture)
-  //             piece at packer Y=(tileH-pieceH) should map to texture V=0 (bottom)
-  // Formula: uvOffsetY = (tileH - pieceY - pieceH) / tileH = 1 - (pieceY + pieceH) / tileH
+  // The Y flip is handled in the shader, so offset is straightforward
   const uvOffsetX = pieceX / tileW;
-  const uvOffsetY = (tileH - pieceY - pieceH) / tileH;  // Flip Y for UV coordinate system
+  const uvOffsetY = pieceY / tileH;
   const uvScaleX = pieceW / tileW;
   const uvScaleY = pieceH / tileH;
   
@@ -475,6 +471,10 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
           // Project from Y axis - X is length, Z is depth
           uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
           uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
+          
+          // FLIP Y: In 3D, Z+ is "forward", but in packer Y=0 is top (back of counter)
+          // So we need to flip to match packer's top-down coordinate system
+          uv.y = 1.0 - uv.y;
           
           // If piece is rotated on tile (grainLengthwise=false):
           if (uIsRotatedOnTile) {
