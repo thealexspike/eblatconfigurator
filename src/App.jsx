@@ -4767,13 +4767,6 @@ function Configurator({ project, onBack }) {
             color: wfHasTexture ? 0xffffff : color,
           });
           
-          // For selection highlight, we'll tint the color directly since MeshBasicMaterial has no emissive
-          if (isSelectedElement) {
-            mat.color = new THREE.Color(highlightColor);
-            mat.transparent = true;
-            mat.opacity = 0.7;
-          }
-          
           if (wfHasTexture) {
             // For waterfall, we need to manually set UV coordinates on the side faces
             // because the piece is laid out horizontally in packer but rendered vertically in 3D
@@ -6932,11 +6925,19 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                 })}
                                 
                                 {/* Joint edge indicators */}
-                                {shouldHighlight && (isLeftWaterfall || isRightWaterfall) && (
+                                {shouldHighlight && isLeftWaterfall && (
+                                  <div style={{
+                                    position: 'absolute',
+                                    top: 0, right: 0, width: 4, bottom: 0,
+                                    background: '#4a90d9',
+                                    borderRadius: '0 2px 2px 0',
+                                  }} />
+                                )}
+                                {shouldHighlight && isRightWaterfall && (
                                   <div style={{
                                     position: 'absolute',
                                     top: 0, left: 0, width: 4, bottom: 0,
-                                    background: isLeftWaterfall ? '#4a90d9' : '#5cb85c',
+                                    background: '#5cb85c',
                                     borderRadius: '2px 0 0 2px',
                                   }} />
                                 )}
