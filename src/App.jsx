@@ -4409,10 +4409,10 @@ function Configurator({ project, onBack }) {
       if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         
-        // Remove existing outlines from mesh
+        // Remove existing outlines AND debug tile helpers from mesh
         const toRemove = [];
         mesh.traverse((child) => {
-          if (child.isLineSegments) {
+          if (child.isLineSegments || child.userData?.isDebugTileHelper) {
             toRemove.push({ parent: child.parent, child: child });
           }
         });
@@ -4425,24 +4425,6 @@ function Configurator({ project, onBack }) {
               child.material.dispose();
             }
           }
-        });
-        
-        // Remove debug tile helpers from SCENE (they're no longer children of mesh)
-        const sceneHelpersToRemove = [];
-        sceneRef.current.traverse((child) => {
-          if (child.userData?.isDebugTileHelper && child.userData?.parentElementId === el.id) {
-            sceneHelpersToRemove.push(child);
-          }
-        });
-        sceneHelpersToRemove.forEach((helper) => {
-          sceneRef.current.remove(helper);
-          helper.traverse((c) => {
-            if (c.geometry) c.geometry.dispose();
-            if (c.material) {
-              if (c.material.map) c.material.map.dispose();
-              c.material.dispose();
-            }
-          });
         });
         
         // Add outline if selected (MeshBasicMaterial doesn't have emissive, so just outline)
@@ -4524,33 +4506,15 @@ function Configurator({ project, onBack }) {
             const tileMesh = new THREE.Mesh(tileGeo, tileMat);
             tileMesh.renderOrder = -1;
             
-            // Get piece world position and rotation
-            const pieceWorldPos = new THREE.Vector3();
-            mesh.getWorldPosition(pieceWorldPos);
-            const pieceRotation = mesh.rotation.y;
-            
-            // Rotate offsets by piece rotation
-            const cosR = Math.cos(pieceRotation);
-            const sinR = Math.sin(pieceRotation);
-            
+            // Position in LOCAL space (as child of mesh)
             if (isBacksplash) {
-              const rotatedOffsetX = offset3dX * cosR;
-              const rotatedOffsetZ = offset3dX * sinR;
-              tileMesh.position.set(
-                pieceWorldPos.x + rotatedOffsetX,
-                pieceWorldPos.y - offset3dZ,
-                pieceWorldPos.z + rotatedOffsetZ - 0.002
-              );
+              tileMesh.position.set(offset3dX, -offset3dZ, -0.005);
             } else {
-              const rotatedOffsetX = offset3dX * cosR - offset3dZ * sinR;
-              const rotatedOffsetZ = offset3dX * sinR + offset3dZ * cosR;
-              tileMesh.position.set(
-                pieceWorldPos.x + rotatedOffsetX,
-                pieceWorldPos.y - 0.002,
-                pieceWorldPos.z + rotatedOffsetZ
-              );
+              tileMesh.position.set(offset3dX, -0.005, offset3dZ);
             }
-            tileMesh.rotation.y = pieceRotation;
+            
+            // Ensure tile helper has no local rotation
+            tileMesh.rotation.set(0, 0, 0);
             
             const textureLoader = new THREE.TextureLoader();
             textureLoader.load(colorData.texture, (texture) => {
@@ -4571,8 +4535,7 @@ function Configurator({ project, onBack }) {
             tileMesh.add(tileOutline);
             
             tileMesh.userData.isDebugTileHelper = true;
-            tileMesh.userData.parentElementId = el.id;
-            sceneRef.current.add(tileMesh);  // Add to scene, not mesh
+            mesh.add(tileMesh);  // Add as child of mesh
           }
         }
         
@@ -4955,49 +4918,35 @@ function Configurator({ project, onBack }) {
         const tileMesh = new THREE.Mesh(tileGeo, tileMat);
         tileMesh.renderOrder = -1;
         
-        // Position tile helper in WORLD space
-        // Tile helper shows the full tile, positioned so the piece's region aligns
-        // We need to account for piece rotation when calculating offsets
-        
-        // Get piece rotation
-        const pieceRotation = mesh.rotation.y; // Rotation around Y axis (in radians)
-        
-        // Rotate the offset vector by the piece's rotation
-        const cosR = Math.cos(pieceRotation);
-        const sinR = Math.sin(pieceRotation);
+        // Position tile helper in LOCAL space of the piece (as child of mesh)
+        // This way it automatically inherits piece rotation
+        //
+        // Offset calculation:
+        // - Piece center is at local (0, 0, 0)
+        // - Tile center needs to be offset so piece aligns with its region on tile
+        // - offsetTileX = tileCenterX - pieceCenterOnTileX (positive = tile center is to the RIGHT of piece center)
+        // - offsetTileY = tileCenterY - pieceCenterOnTileY (positive = tile center is BELOW piece center in packer coords)
+        //
+        // Mapping to 3D local space:
+        // - Packer X -> Local X (same direction, positive = right)
+        // - Packer Y -> Local Z for slab (positive packer Y = "down" = positive local Z = "forward")
+        // - Packer Y -> Local -Y for backsplash (positive packer Y = "down" = negative local Y = "down")
         
         if (isBacksplash) {
-          // Backsplash: X=width, Y=height, Z=position
-          // Offset is in local space (offsetTileX along local X, offsetTileY along local Y)
-          // Rotate offsetTileX around Y axis
-          const rotatedOffsetX = offsetTileX * cosR;
-          const rotatedOffsetZ = offsetTileX * sinR;
-          
-          tileMesh.position.set(
-            pieceWorldPos.x + rotatedOffsetX,
-            pieceWorldPos.y - offsetTileY,  // Y offset doesn't rotate
-            pieceWorldPos.z + rotatedOffsetZ - 0.002
-          );
-          // Match piece rotation
-          tileMesh.rotation.y = pieceRotation;
+          // Backsplash: local X = width, local Y = height, local Z = thickness
+          // Packer Y (down) maps to local -Y (down)
+          tileMesh.position.set(offsetTileX, -offsetTileY, -0.005);
         } else {
-          // Slab: X=width, Y=up, Z=depth
-          // Offset is in local space (offsetTileX along local X, offsetTileY along local Z)
-          // Rotate both around Y axis
-          const rotatedOffsetX = offsetTileX * cosR - offsetTileY * sinR;
-          const rotatedOffsetZ = offsetTileX * sinR + offsetTileY * cosR;
-          
-          tileMesh.position.set(
-            pieceWorldPos.x + rotatedOffsetX,
-            pieceWorldPos.y - 0.002,
-            pieceWorldPos.z + rotatedOffsetZ
-          );
-          // Match piece rotation
-          tileMesh.rotation.y = pieceRotation;
+          // Slab: local X = length, local Y = thickness, local Z = depth
+          // Packer Y (down) maps to local Z (forward)
+          tileMesh.position.set(offsetTileX, -0.005, offsetTileY);
         }
         
-        // Add to SCENE, not mesh - so we have full control over positioning
-        sceneRef.current.add(tileMesh);
+        // Ensure tile helper has no local rotation (inherits parent rotation only)
+        tileMesh.rotation.set(0, 0, 0);
+        
+        // Add as CHILD of mesh - inherits rotation automatically
+        mesh.add(tileMesh);
         
         // Store reference for cleanup
         tileMesh.userData.isDebugTileHelper = true;
