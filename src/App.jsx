@@ -4405,10 +4405,8 @@ function Configurator({ project, onBack }) {
       const hasWaterfall = el.waterfallLeft || el.waterfallRight;
       
       // If debug mode changed, force full mesh recreation to update shader
-      // If debug mode is ACTIVE and selection changed, also force recreation (to update transparency)
-      // If only selection or groupId changed and NO waterfall and NO debug mode, update outline without recreating
-      const needsRecreationForDebug = debugTexture && selectionChanged;
-      if (!isNew && !geometryChanged && !debugModeChanged && !needsRecreationForDebug && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
+      // If only selection or groupId changed and NO waterfall, update outline without recreating
+      if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         
         // Remove existing outlines AND debug tile helpers from mesh
@@ -4428,6 +4426,42 @@ function Configurator({ project, onBack }) {
             }
           }
         });
+        
+        // When debug mode is active, update material transparency based on selection
+        if (debugTexture) {
+          const colorData = library.colors.find(c => c.id === el.material) || { color: '#666666' };
+          const color = new THREE.Color(colorData.color);
+          const layoutInfo = layout[`${el.id}_main`];
+          const isBacksplash = el.type === 'backsplash';
+          
+          if (shouldHighlight) {
+            // Selected: make transparent
+            const transparentMat = new THREE.MeshBasicMaterial({
+              color: color,
+              transparent: true,
+              opacity: 0,
+              depthWrite: false
+            });
+            mesh.material.dispose();
+            mesh.material = transparentMat;
+          } else {
+            // Deselected: restore texture
+            if (colorData.texture && layoutInfo) {
+              const textureLoader = new THREE.TextureLoader();
+              textureLoader.load(colorData.texture, (texture) => {
+                texture.wrapS = THREE.ClampToEdgeWrapping;
+                texture.wrapT = THREE.ClampToEdgeWrapping;
+                texture.anisotropy = rendererRef.current?.capabilities?.getMaxAnisotropy() || 4;
+                const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color, false);
+                mesh.material.dispose();
+                mesh.material = triplanarMat;
+              });
+            } else {
+              mesh.material.dispose();
+              mesh.material = new THREE.MeshBasicMaterial({ color: color });
+            }
+          }
+        }
         
         // Add outline if selected (MeshBasicMaterial doesn't have emissive, so just outline)
         if (shouldHighlight) {
