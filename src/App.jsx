@@ -401,8 +401,13 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   const isRotatedOnTile = layoutInfo.grainLengthwise === false;
   
   // UV offset and scale - these define where on the tile texture this piece maps
+  // Packer uses top-left origin (Y increases downward)
+  // We need to flip Y offset because we flip uv.y in shader
+  // After flip: piece at packer Y=0 should map to texture V=1 (top of texture)
+  //             piece at packer Y=(tileH-pieceH) should map to texture V=0 (bottom)
+  // Formula: uvOffsetY = (tileH - pieceY - pieceH) / tileH = 1 - (pieceY + pieceH) / tileH
   const uvOffsetX = pieceX / tileW;
-  const uvOffsetY = pieceY / tileH;
+  const uvOffsetY = (tileH - pieceY - pieceH) / tileH;  // Flip Y for UV coordinate system
   const uvScaleX = pieceW / tileW;
   const uvScaleY = pieceH / tileH;
   
@@ -456,9 +461,6 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
           uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
           uv.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
           
-          // FLIP Y: Tile packing uses top-left origin (Y down), but UV uses bottom-left (V up)
-          uv.y = 1.0 - uv.y;
-          
           // If piece is rotated on tile (grainLengthwise=false):
           if (uIsRotatedOnTile) {
             vec2 swapped = vec2(uv.y, 1.0 - uv.x);
@@ -473,9 +475,6 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
           // Project from Y axis - X is length, Z is depth
           uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
           uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
-          
-          // FLIP Y: Tile packing uses top-left origin (Y down), but UV uses bottom-left (V up)
-          uv.y = 1.0 - uv.y;
           
           // If piece is rotated on tile (grainLengthwise=false):
           if (uIsRotatedOnTile) {
@@ -4681,83 +4680,86 @@ function Configurator({ project, onBack }) {
       // Only for SELECTED elements to avoid visual clutter
       const isDebugActive = debugTexture && shouldHighlight;
       if (isDebugActive && layoutInfo && colorData.texture) {
-        const tileW = layoutInfo.tileW / 100; // tile width in meters (e.g., 3.2m for 320cm)
-        const tileH = layoutInfo.tileH / 100; // tile height in meters (e.g., 1.6m for 160cm)
+        const tileW = layoutInfo.tileW / 100; // tile width in meters
+        const tileH = layoutInfo.tileH / 100; // tile height in meters
         
-        // Piece position on tile (in meters, from tile origin at top-left)
-        const pieceX = layoutInfo.x / 100; // piece X offset on tile
-        const pieceY = layoutInfo.y / 100; // piece Y offset on tile
-        const pieceW = layoutInfo.pieceW / 100; // piece width on tile
-        const pieceH = layoutInfo.pieceH / 100; // piece height on tile
+        // Piece position on tile (in meters)
+        const pieceX = layoutInfo.x / 100;
+        const pieceY = layoutInfo.y / 100;
+        const pieceW = layoutInfo.pieceW / 100;
+        const pieceH = layoutInfo.pieceH / 100;
         
-        // The piece mesh is centered at (0,0) in local coords
-        // On the tile, the piece occupies from (pieceX, pieceY) to (pieceX+pieceW, pieceY+pieceH)
-        // 
-        // We need to position the tile so that when the piece is at its world position,
-        // the tile's texture aligns correctly.
-        //
-        // Tile center offset from piece center:
-        // Piece center on tile: (pieceX + pieceW/2, pieceY + pieceH/2)
-        // Tile center: (tileW/2, tileH/2)
-        // Offset: tileCenter - pieceCenter
-        
+        // Calculate offset from piece center to tile center
         const pieceCenterOnTileX = pieceX + pieceW / 2;
         const pieceCenterOnTileY = pieceY + pieceH / 2;
         const tileCenterX = tileW / 2;
         const tileCenterY = tileH / 2;
         
-        // Offset from piece center to tile center (in tile's local coordinate system)
         const offsetX = tileCenterX - pieceCenterOnTileX;
-        const offsetZ = tileCenterY - pieceCenterOnTileY; // Y on tile maps to Z in 3D for slab
+        const offsetZ = pieceCenterOnTileY - tileCenterY;
         
-        // Create tile geometry
         const isBacksplash = el.type === 'backsplash';
+        
+        // Create tile geometry - use BoxGeometry like pieces for consistent normals
         let tileGeo;
         if (isBacksplash) {
-          tileGeo = new THREE.PlaneGeometry(tileW, tileH);
+          // Thin box for backsplash
+          tileGeo = new THREE.BoxGeometry(tileW, tileH, 0.001);
         } else {
-          tileGeo = new THREE.PlaneGeometry(tileW, tileH);
-          tileGeo.rotateX(-Math.PI / 2); // Lay flat for slab
+          // Thin box for slab (width, thickness, depth)
+          tileGeo = new THREE.BoxGeometry(tileW, 0.001, tileH);
         }
         
-        // Create tile material with full texture and transparency
-        const tileMat = new THREE.MeshBasicMaterial({
-          color: 0xffffff,
+        // Create layout info for the FULL TILE (offset 0, scale 1)
+        const fullTileLayoutInfo = {
+          x: 0,
+          y: 0,
+          w: layoutInfo.tileW,  // Full tile width in cm
+          h: layoutInfo.tileH,  // Full tile height in cm
+          pieceW: layoutInfo.tileW,
+          pieceH: layoutInfo.tileH,
+          tileW: layoutInfo.tileW,
+          tileH: layoutInfo.tileH,
+          grainLengthwise: true  // No rotation for full tile
+        };
+        
+        // Load texture and create material using same shader
+        const textureLoader = new THREE.TextureLoader();
+        const tileMat = new THREE.MeshBasicMaterial({ 
+          color: color,
           transparent: true,
-          opacity: 0.5,
-          side: THREE.DoubleSide,
-          depthWrite: false,
+          opacity: 0.5
         });
         
-        // Load texture for the tile helper
-        const textureLoader = new THREE.TextureLoader();
         textureLoader.load(colorData.texture, (texture) => {
           texture.wrapS = THREE.ClampToEdgeWrapping;
           texture.wrapT = THREE.ClampToEdgeWrapping;
-          // Keep flipY = true (default) since PlaneGeometry UVs expect this
-          // The texture will be flipped to match standard UV conventions
-          texture.flipY = false; // Match the packing coordinate system (top-left origin)
-          tileMat.map = texture;
-          tileMat.needsUpdate = true;
+          texture.anisotropy = rendererRef.current?.capabilities?.getMaxAnisotropy() || 4;
+          
+          // Use same triplanar material as pieces, but for full tile
+          const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false);
+          tileTriplanarMat.transparent = true;
+          tileTriplanarMat.opacity = 0.5;
+          tileTriplanarMat.depthWrite = false;
+          
+          tileMesh.material = tileTriplanarMat;
+          tileMesh.material.needsUpdate = true;
         });
         
         const tileMesh = new THREE.Mesh(tileGeo, tileMat);
-        tileMesh.renderOrder = -1; // Render behind the piece
+        tileMesh.renderOrder = -1;
         
-        // Position the tile mesh relative to the piece
-        // The piece is at world position, we offset the tile so it aligns
+        // Position tile helper relative to piece
         if (isBacksplash) {
-          // For backsplash: offset in X and Y
-          tileMesh.position.set(offsetX, -offsetZ, -0.001); // Slightly behind
+          tileMesh.position.set(offsetX, -offsetZ, -0.002);
         } else {
-          // For slab: offset in X and Z, slightly below
-          tileMesh.position.set(offsetX, -0.001, offsetZ);
+          tileMesh.position.set(offsetX, -0.002, offsetZ);
         }
         
-        // Add wireframe border to show tile edges
+        // Add cyan wireframe border
         const tileEdges = new THREE.EdgesGeometry(tileGeo);
         const tileLineMat = new THREE.LineBasicMaterial({ 
-          color: 0x00ffff, // Cyan
+          color: 0x00ffff,
           linewidth: 2,
           depthTest: false,
         });
@@ -4765,10 +4767,7 @@ function Configurator({ project, onBack }) {
         tileOutline.renderOrder = 999;
         tileMesh.add(tileOutline);
         
-        // Mark as debug helper so we can identify it later
         tileMesh.userData.isDebugTileHelper = true;
-        
-        // Add tile as child of the piece mesh so it moves/rotates with it
         mesh.add(tileMesh);
       }
     });
