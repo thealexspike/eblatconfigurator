@@ -488,49 +488,52 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
       
       if (isMainFace) {
         // Map UV from piece space to tile texture space
+        // tileUV goes from uPieceOffset to uPieceOffset + uPieceScale as uv goes 0 to 1
         vec2 tileUV = uPieceOffset + uv * uPieceScale;
         
         if (uDebugMode) {
-          // Debug mode: show ENTIRE texture with piece region highlighted
-          // Use local position to show full texture stretched across piece
-          vec2 fullTextureUV;
-          if (uIsBacksplash) {
-            fullTextureUV.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
-            fullTextureUV.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
-          } else {
-            fullTextureUV.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
-            fullTextureUV.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
-          }
+          // DEBUG MODE: Show the FULL 320x160 TILE at REAL SCALE
+          // The piece is a "window" into the tile - texture extends BEYOND piece edges
+          // 
+          // tileUV = uPieceOffset + uv * uPieceScale
+          // This means when uv goes 0→1 (across piece), tileUV goes from offset to offset+scale
+          // 
+          // To show the FULL tile, we need to calculate where on the piece each part of the tile would be
+          // Inverse: to get full tile UV from piece UV:
+          //   fullTileUV = tileUV (already calculated correctly)
+          //
+          // The texture coordinates tileUV already sample the correct part of the tile
+          // We just need to show them and indicate where the tile boundaries are
           
-          // Sample full texture (0-1 maps to entire texture)
-          vec4 fullTexColor = texture2D(uTexture, fullTextureUV);
+          vec4 texColor = texture2D(uTexture, tileUV);
           
-          // Highlight the actual piece region with a golden border
-          bool inPieceRegion = fullTextureUV.x >= uPieceOffset.x && 
-                               fullTextureUV.x <= uPieceOffset.x + uPieceScale.x &&
-                               fullTextureUV.y >= uPieceOffset.y && 
-                               fullTextureUV.y <= uPieceOffset.y + uPieceScale.y;
+          // Check if we're inside the tile bounds (tileUV 0-1)
+          bool insideTile = tileUV.x >= 0.0 && tileUV.x <= 1.0 && tileUV.y >= 0.0 && tileUV.y <= 1.0;
           
-          // Check if near border of piece region
-          float borderWidth = 0.01;
-          bool nearBorder = (abs(fullTextureUV.x - uPieceOffset.x) < borderWidth ||
-                            abs(fullTextureUV.x - (uPieceOffset.x + uPieceScale.x)) < borderWidth ||
-                            abs(fullTextureUV.y - uPieceOffset.y) < borderWidth ||
-                            abs(fullTextureUV.y - (uPieceOffset.y + uPieceScale.y)) < borderWidth) &&
-                           fullTextureUV.x >= uPieceOffset.x - borderWidth && 
-                           fullTextureUV.x <= uPieceOffset.x + uPieceScale.x + borderWidth &&
-                           fullTextureUV.y >= uPieceOffset.y - borderWidth && 
-                           fullTextureUV.y <= uPieceOffset.y + uPieceScale.y + borderWidth;
+          // Draw border at piece edges (uv = 0 or 1)
+          float pieceBorderW = 0.02;
+          bool atPieceBorder = uv.x < pieceBorderW || uv.x > 1.0 - pieceBorderW || 
+                               uv.y < pieceBorderW || uv.y > 1.0 - pieceBorderW;
           
-          if (nearBorder) {
-            // Golden border around piece region
+          // Draw border at tile edges (tileUV = 0 or 1)
+          float tileBorderW = 0.008;
+          bool atTileBorder = (tileUV.x >= 0.0 - tileBorderW && tileUV.x <= tileBorderW) || 
+                              (tileUV.x >= 1.0 - tileBorderW && tileUV.x <= 1.0 + tileBorderW) ||
+                              (tileUV.y >= 0.0 - tileBorderW && tileUV.y <= tileBorderW) || 
+                              (tileUV.y >= 1.0 - tileBorderW && tileUV.y <= 1.0 + tileBorderW);
+          
+          if (atPieceBorder) {
+            // Golden border at PIECE boundary
             gl_FragColor = vec4(0.79, 0.66, 0.38, 1.0);
-          } else if (inPieceRegion) {
-            // Full opacity inside piece region
-            gl_FragColor = fullTexColor;
+          } else if (atTileBorder && insideTile) {
+            // Cyan border at TILE boundary
+            gl_FragColor = vec4(0.0, 0.9, 0.9, 1.0);
+          } else if (insideTile) {
+            // Inside tile: show texture with slight transparency
+            gl_FragColor = vec4(texColor.rgb, 0.85);
           } else {
-            // 35% opacity outside piece region
-            gl_FragColor = vec4(fullTexColor.rgb, 0.35);
+            // Outside tile bounds: dark red tint to show we're beyond the tile
+            gl_FragColor = vec4(0.3, 0.1, 0.1, 0.5);
           }
         } else {
           gl_FragColor = texture2D(uTexture, tileUV);
