@@ -385,43 +385,27 @@ function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [],
  * @param {boolean} debugMode - If true, show full texture with transparency
  * @param {number} opacity - Opacity of the material (0-1), default 1.0
  */
-function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor, debugMode = false, opacity = 1.0, isWaterfall = false) {
+function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor, debugMode = false, opacity = 1.0, isWaterfall = false, isLeftWaterfall = false) {
   if (!texture || !layoutInfo) {
     return new THREE.MeshBasicMaterial({ color: fallbackColor || 0x666666 });
   }
   
-  // Calculate UV offset and scale based on piece position on tile
+  // Piece position and size on tile (in packer coordinates, cm)
   const tileW = layoutInfo.tileW;
   const tileH = layoutInfo.tileH;
-  const pieceX = layoutInfo.x;
+  const pieceX = layoutInfo.x;      // Position on tile
   const pieceY = layoutInfo.y;
-  const pieceW = layoutInfo.pieceW;
+  const pieceW = layoutInfo.pieceW; // Size on tile (may be rotated)
   const pieceH = layoutInfo.pieceH;
   
-  // Check if piece is rotated on tile (grainLengthwise = false means rotated 90°)
-  const isRotatedOnTile = layoutInfo.grainLengthwise === false;
+  // Original mesh dimensions (in meters)
+  const meshW = layoutInfo.w / 100;  // Mesh width (X axis for slab/backsplash, or height for waterfall concept)
+  const meshH = layoutInfo.h / 100;  // Mesh depth (Z for slab) or height (Y for backsplash)
   
-  // UV offset and scale - these define where on the tile texture this piece maps
-  // 
-  // Coordinate systems:
-  // - Packer: origin top-left, Y increases downward
-  // - Shader UV after flip (uv.y = 1 - uv.y): origin bottom-left, but we sample from top
-  // 
-  // After shader flips uv.y, a piece at packer position (x, y) needs offset:
-  // - uvOffsetX = pieceX / tileW (unchanged)
-  // - uvOffsetY needs adjustment: when shader does 1-uv.y, we need to offset from the OTHER end
-  //   Formula: uvOffsetY = 1 - (pieceY + pieceH) / tileH = (tileH - pieceY - pieceH) / tileH
-  const uvOffsetX = pieceX / tileW;
-  const uvOffsetY = (tileH - pieceY - pieceH) / tileH;  // Compensate for shader's Y flip
-  const uvScaleX = pieceW / tileW;
-  const uvScaleY = pieceH / tileH;
-  
-  // Piece size in meters for local coordinate normalization
-  // w, h are ORIGINAL dimensions (before potential rotation for packing)
-  // pieceW, pieceH are dimensions ON THE TILE (after rotation if grainLengthwise=false)
-  // The mesh always has dimensions w x h (length x depth/height)
-  const pieceSizeX = layoutInfo.w / 100;  // Always use original width for mesh X axis
-  const pieceSizeY = layoutInfo.h / 100;  // Always use original height/depth for mesh Y/Z axis
+  // Calculate average color from fallback (or use a neutral gray)
+  const sideColor = fallbackColor ? 
+    new THREE.Color(fallbackColor).multiplyScalar(0.8) : 
+    new THREE.Color(0.4, 0.4, 0.4);
   
   const vertexShader = `
     varying vec3 vLocalPosition;
@@ -429,21 +413,37 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
     
     void main() {
       vLocalPosition = position;
-      // Use LOCAL normal directly, not transformed by normalMatrix
-      // This ensures face detection works regardless of camera angle
       vLocalNormal = normal;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `;
   
+  // UNIFIED APPROACH:
+  // All pieces are cut from a flat tile. We calculate where each 3D point
+  // would be on that original flat tile, then sample the texture there.
+  //
+  // Packer coordinate system:
+  // - Origin: top-left of tile
+  // - X: increases to the right (0 to tileW)
+  // - Y: increases downward (0 to tileH)
+  //
+  // Texture UV coordinate system:
+  // - Origin: bottom-left
+  // - U: increases to the right (0 to 1)
+  // - V: increases upward (0 to 1)
+  //
+  // So: texU = packerX / tileW
+  //     texV = 1 - packerY / tileH
+  
   const fragmentShader = `
     uniform sampler2D uTexture;
-    uniform vec2 uPieceOffset;
-    uniform vec2 uPieceScale;
-    uniform vec2 uPieceSize;
+    uniform vec2 uTileSize;      // (tileW, tileH) in cm
+    uniform vec2 uPiecePos;      // (pieceX, pieceY) in cm - top-left corner on tile
+    uniform vec2 uPieceSize;     // (pieceW, pieceH) in cm - size on tile
+    uniform vec2 uMeshSize;      // (meshW, meshH) in meters - actual 3D mesh dimensions
     uniform bool uIsBacksplash;
     uniform bool uIsWaterfall;
-    uniform bool uIsRotatedOnTile;
+    uniform bool uIsLeftWaterfall;
     uniform vec3 uSideColor;
     uniform bool uDebugMode;
     uniform float uOpacity;
@@ -452,146 +452,106 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
     varying vec3 vLocalNormal;
     
     void main() {
-      vec2 uv;
-      
-      // Check if this is the top/front face (where texture should appear)
-      // Using LOCAL normals so this works regardless of camera orientation
+      // Step 1: Determine if this is the main textured face
       bool isMainFace = false;
       
+      // Local coordinates normalized to 0-1 range within the mesh
+      vec2 localUV;
+      
       if (uIsBacksplash) {
-        // Backsplash: front face has local normal pointing in +Z direction
+        // Backsplash: vertical panel, front face is +Z
+        // Mesh: X = width, Y = height, Z = thickness
         isMainFace = vLocalNormal.z > 0.5;
-        
         if (isMainFace) {
-          // Project from Z axis - X is horizontal, Y is vertical
-          // Map local position to 0-1 UV space
-          uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
-          uv.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
-          
-          // If piece is rotated on tile (grainLengthwise=false):
-          if (uIsRotatedOnTile) {
-            vec2 swapped = vec2(uv.y, 1.0 - uv.x);
-            uv = swapped;
-          }
+          // Map mesh local coords to packer coords
+          // Mesh X (-w/2 to +w/2) -> packer X (0 to pieceW)
+          // Mesh Y (-h/2 to +h/2) -> packer Y (pieceH to 0) [inverted - top of mesh = top of packer]
+          localUV.x = (vLocalPosition.x / uMeshSize.x) + 0.5;
+          localUV.y = 1.0 - ((vLocalPosition.y / uMeshSize.y) + 0.5); // Flip Y
         }
       } else if (uIsWaterfall) {
-        // Waterfall: side face has local normal pointing in ±X direction
-        // The waterfall is cut from the SAME tile as the slab, positioned adjacent
-        // 
-        // Packer layout (horizontal): pieceW = waterfallHeight (90), pieceH = depth (60)
-        // 3D geometry: BoxGeometry(thickness, height=90, depth=60)
-        //
-        // Looking at the texture arrows:
-        // - On slab: arrow points in +X direction (length)
-        // - On waterfall: arrow should point UP (+Y direction = height)
-        //
-        // The texture on tile has:
-        // - Horizontal = pieceW = 90 = waterfall height
-        // - Vertical = pieceH = 60 = depth
-        //
-        // So on waterfall face:
-        // - Local Y (height, going up) should sample along pieceW (horizontal on tile)
-        // - Local Z (depth) should sample along pieceH (vertical on tile)
+        // Waterfall: vertical panel on side of slab
+        // Mesh: X = thickness, Y = height (waterfallHeight), Z = depth
+        // The piece on tile: pieceW = waterfallHeight, pieceH = depth
         
-        isMainFace = abs(vLocalNormal.x) > 0.5;
+        // Exterior face only
+        if (uIsLeftWaterfall) {
+          isMainFace = vLocalNormal.x < -0.5;
+        } else {
+          isMainFace = vLocalNormal.x > 0.5;
+        }
         
         if (isMainFace) {
-          // Map local coordinates to UV
-          // Y (height 0-90) → horizontal on tile (pieceW) → UV.x
-          // Z (depth 0-60) → vertical on tile (pieceH) → UV.y
-          float normY = (vLocalPosition.y / uPieceSize.x) + 0.5;  // 0-1 along height
-          float normZ = (vLocalPosition.z / uPieceSize.y) + 0.5;  // 0-1 along depth
+          // Waterfall is "unfolded" from slab - imagine laying it flat
+          // Mesh Y (height) corresponds to pieceW (horizontal on tile)
+          // Mesh Z (depth) corresponds to pieceH (vertical on tile)
+          float normY = (vLocalPosition.y / uMeshSize.x) + 0.5;  // Y -> pieceW direction
+          float normZ = (vLocalPosition.z / uMeshSize.y) + 0.5;  // Z -> pieceH direction
           
-          // The texture is laid out with pieceW horizontal, pieceH vertical
-          // We want Y to go along pieceW direction, Z along pieceH direction
-          uv.x = normY;  // height maps to horizontal texture axis
-          uv.y = normZ;  // depth maps to vertical texture axis
+          localUV.x = normY;
+          localUV.y = 1.0 - normZ;  // Flip to match packer Y direction
           
-          // Flip Y to match packer's coordinate system (Y=0 at top)
-          uv.y = 1.0 - uv.y;
-          
-          // For exterior face (+X), we're looking from outside
-          // For interior face (-X), mirror horizontally
-          if (vLocalNormal.x < 0.0) {
-            uv.x = 1.0 - uv.x;
-          }
-          
-          // Apply rotation transform if piece is rotated on tile
-          if (uIsRotatedOnTile) {
-            vec2 swapped = vec2(uv.y, 1.0 - uv.x);
-            uv = swapped;
+          // Mirror for left waterfall (viewing from -X direction)
+          if (uIsLeftWaterfall) {
+            localUV.x = 1.0 - localUV.x;
           }
         }
       } else {
-        // Slab: top face has local normal pointing in +Y direction
-        // Use more permissive check because ExtrudeGeometry normals may not be exactly (0,1,0)
+        // Slab: horizontal panel, top face is +Y
+        // Mesh: X = length, Y = thickness, Z = depth
         isMainFace = vLocalNormal.y > 0.3 && abs(vLocalNormal.x) < 0.5 && abs(vLocalNormal.z) < 0.5;
         
         if (isMainFace) {
-          // Project from Y axis - X is length, Z is depth
-          uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
-          uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
-          
-          // FLIP Y: In 3D, Z+ is "forward", but in packer Y=0 is top (back of counter)
-          // So we need to flip to match packer's top-down coordinate system
-          uv.y = 1.0 - uv.y;
-          
-          // If piece is rotated on tile (grainLengthwise=false):
-          if (uIsRotatedOnTile) {
-            vec2 swapped = vec2(uv.y, 1.0 - uv.x);
-            uv = swapped;
-          }
+          // Map mesh local coords to packer coords
+          // Mesh X (-w/2 to +w/2) -> packer X (0 to pieceW)
+          // Mesh Z (-h/2 to +h/2) -> packer Y (0 to pieceH)
+          localUV.x = (vLocalPosition.x / uMeshSize.x) + 0.5;
+          localUV.y = 1.0 - ((vLocalPosition.z / uMeshSize.y) + 0.5); // Flip Z->Y
         }
       }
       
       if (isMainFace) {
-        // Map UV from piece space to tile texture space
-        // tileUV goes from uPieceOffset to uPieceOffset + uPieceScale as uv goes 0 to 1
-        vec2 tileUV = uPieceOffset + uv * uPieceScale;
+        // Step 2: Convert localUV (0-1 within piece) to packer coordinates (cm)
+        float packerX = uPiecePos.x + localUV.x * uPieceSize.x;
+        float packerY = uPiecePos.y + localUV.y * uPieceSize.y;
+        
+        // Step 3: Convert packer coords to texture UV
+        float texU = packerX / uTileSize.x;
+        float texV = 1.0 - (packerY / uTileSize.y);  // Flip Y for texture coords
+        
+        vec2 tileUV = vec2(texU, texV);
+        vec4 texColor = texture2D(uTexture, tileUV);
         
         if (uDebugMode) {
-          // DEBUG MODE: Show piece texture with gold border
-          // The actual tile visualization is done with a separate helper mesh
-          
-          vec4 texColor = texture2D(uTexture, tileUV);
-          
-          // Border at piece edges
+          // Debug: show gold border at piece edges
           float borderW = 0.02;
-          bool atPieceBorder = uv.x < borderW || uv.x > 1.0 - borderW || 
-                               uv.y < borderW || uv.y > 1.0 - borderW;
-          
-          if (atPieceBorder) {
-            // GOLD border = piece edges
+          bool atBorder = localUV.x < borderW || localUV.x > 1.0 - borderW || 
+                          localUV.y < borderW || localUV.y > 1.0 - borderW;
+          if (atBorder) {
             gl_FragColor = vec4(0.79, 0.66, 0.38, 1.0);
           } else {
-            // Show texture with slight transparency so tile helper shows through
             gl_FragColor = vec4(texColor.rgb, 0.9);
           }
         } else {
-          vec4 texColor = texture2D(uTexture, tileUV);
           gl_FragColor = vec4(texColor.rgb, uOpacity);
         }
       } else {
-        // Sides and back: solid color
+        // Side faces: solid color
         gl_FragColor = vec4(uSideColor, uOpacity);
       }
     }
   `;
   
-  // Calculate average color from fallback (or use a neutral gray)
-  const sideColor = fallbackColor ? 
-    new THREE.Color(fallbackColor).multiplyScalar(0.8) : 
-    new THREE.Color(0.4, 0.4, 0.4);
-  
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uTexture: { value: texture },
-      uPieceOffset: { value: new THREE.Vector2(uvOffsetX, uvOffsetY) },
-      uPieceScale: { value: new THREE.Vector2(uvScaleX, uvScaleY) },
-      uPieceSize: { value: new THREE.Vector2(pieceSizeX, pieceSizeY) },
+      uTileSize: { value: new THREE.Vector2(tileW, tileH) },
+      uPiecePos: { value: new THREE.Vector2(pieceX, pieceY) },
+      uPieceSize: { value: new THREE.Vector2(pieceW, pieceH) },
+      uMeshSize: { value: new THREE.Vector2(meshW, meshH) },
       uIsBacksplash: { value: isBacksplash },
       uIsWaterfall: { value: isWaterfall },
-      uIsRotatedOnTile: { value: isRotatedOnTile },
+      uIsLeftWaterfall: { value: isLeftWaterfall },
       uSideColor: { value: sideColor },
       uDebugMode: { value: debugMode },
       uOpacity: { value: opacity }
@@ -4833,7 +4793,9 @@ function Configurator({ project, onBack }) {
               texture.generateMipmaps = true;
               
               // Create triplanar material for waterfall (isWaterfall = true)
-              const triplanarMat = createTriplanarMaterial(texture, wfLayout, false, color, false, 1.0, true);
+              // Pass side info: 'left' or 'right' to determine which face is exterior
+              const isLeftWaterfall = side === 'left';
+              const triplanarMat = createTriplanarMaterial(texture, wfLayout, false, color, false, 1.0, true, isLeftWaterfall);
               mesh.material.dispose();
               mesh.material = triplanarMat;
             });
