@@ -480,36 +480,43 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
         // 
         // Packer layout (horizontal): pieceW = waterfallHeight (90), pieceH = depth (60)
         // 3D geometry: BoxGeometry(thickness, height=90, depth=60)
-        //   - Local Y axis = height (90cm) = pieceW direction on tile
-        //   - Local Z axis = depth (60cm) = pieceH direction on tile
         //
-        // For texture continuity with slab at the common edge:
-        // - Treat as if looking at the tile from above (like slab)
-        // - Then the texture "folds down" onto the waterfall face
+        // Looking at the texture arrows:
+        // - On slab: arrow points in +X direction (length)
+        // - On waterfall: arrow should point UP (+Y direction = height)
         //
-        // Mapping:
-        // - Local Y (0 to height) → tile X direction (pieceW)
-        // - Local Z (0 to depth) → tile Y direction (pieceH)
+        // The texture on tile has:
+        // - Horizontal = pieceW = 90 = waterfall height
+        // - Vertical = pieceH = 60 = depth
+        //
+        // So on waterfall face:
+        // - Local Y (height, going up) should sample along pieceW (horizontal on tile)
+        // - Local Z (depth) should sample along pieceH (vertical on tile)
         
         isMainFace = abs(vLocalNormal.x) > 0.5;
         
         if (isMainFace) {
-          // Map local Y to UV.x (horizontal on tile = pieceW = height)
-          // Map local Z to UV.y (vertical on tile = pieceH = depth)
-          uv.x = (vLocalPosition.y / uPieceSize.x) + 0.5;  // Y → pieceW direction
-          uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;  // Z → pieceH direction
+          // Map local coordinates to UV
+          // Y (height 0-90) → horizontal on tile (pieceW) → UV.x
+          // Z (depth 0-60) → vertical on tile (pieceH) → UV.y
+          float normY = (vLocalPosition.y / uPieceSize.x) + 0.5;  // 0-1 along height
+          float normZ = (vLocalPosition.z / uPieceSize.y) + 0.5;  // 0-1 along depth
           
-          // Flip Y to match packer's top-down coordinate system (same as slab)
+          // The texture is laid out with pieceW horizontal, pieceH vertical
+          // We want Y to go along pieceW direction, Z along pieceH direction
+          uv.x = normY;  // height maps to horizontal texture axis
+          uv.y = normZ;  // depth maps to vertical texture axis
+          
+          // Flip Y to match packer's coordinate system (Y=0 at top)
           uv.y = 1.0 - uv.y;
           
-          // For -X face (interior side), mirror the texture
+          // For exterior face (+X), we're looking from outside
+          // For interior face (-X), mirror horizontally
           if (vLocalNormal.x < 0.0) {
             uv.x = 1.0 - uv.x;
           }
           
-          // Waterfall is always rotated on tile (grainLengthwise=false)
-          // The rotation swap is already handled by how we map Y→x and Z→y
-          // But we still need the standard rotation transform if flagged
+          // Apply rotation transform if piece is rotated on tile
           if (uIsRotatedOnTile) {
             vec2 swapped = vec2(uv.y, 1.0 - uv.x);
             uv = swapped;
