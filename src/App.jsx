@@ -5670,9 +5670,9 @@ function Configurator({ project, onBack }) {
               fontSize: '11px',
               padding: '4px 8px'
             }}
-            title="Afișează textura completă pe piese (pentru debug UV mapping)"
+            title="Afișează textura completă pe piese selectate pentru a vedea încadrarea"
           >
-            🔍 Debug Textură {debugTexture ? 'ON' : 'OFF'}
+            🔍 Vezi Încadrarea {debugTexture ? 'ON' : 'OFF'}
           </button>
         </div>
 
