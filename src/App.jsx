@@ -382,8 +382,9 @@ function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [],
  * @param {Object} layoutInfo - Layout info with tile/piece positions
  * @param {boolean} isBacksplash - If true, project from Z axis, else from Y
  * @param {THREE.Color} fallbackColor - Color to use for sides/back
+ * @param {boolean} debugMode - If true, show full texture with transparency
  */
-function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor) {
+function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColor, debugMode = false) {
   if (!texture || !layoutInfo) {
     return new THREE.MeshBasicMaterial({ color: fallbackColor || 0x666666 });
   }
@@ -399,16 +400,18 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   // Check if piece is rotated on tile (grainLengthwise = false means rotated 90°)
   const isRotatedOnTile = layoutInfo.grainLengthwise === false;
   
-  // UV offset and scale
+  // UV offset and scale - these define where on the tile texture this piece maps
   const uvOffsetX = pieceX / tileW;
   const uvOffsetY = pieceY / tileH;
   const uvScaleX = pieceW / tileW;
   const uvScaleY = pieceH / tileH;
   
   // Piece size in meters for local coordinate normalization
-  // When rotated, the piece's local X maps to tile Y and vice versa
-  const pieceSizeX = (isRotatedOnTile ? layoutInfo.h : layoutInfo.w) / 100;
-  const pieceSizeY = (isRotatedOnTile ? layoutInfo.w : layoutInfo.h) / 100;
+  // w, h are ORIGINAL dimensions (before potential rotation for packing)
+  // pieceW, pieceH are dimensions ON THE TILE (after rotation if grainLengthwise=false)
+  // The mesh always has dimensions w x h (length x depth/height)
+  const pieceSizeX = layoutInfo.w / 100;  // Always use original width for mesh X axis
+  const pieceSizeY = layoutInfo.h / 100;  // Always use original height/depth for mesh Y/Z axis
   
   const vertexShader = `
     varying vec3 vLocalPosition;
@@ -429,6 +432,7 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
     uniform bool uIsBacksplash;
     uniform bool uIsRotatedOnTile;
     uniform vec3 uSideColor;
+    uniform bool uDebugMode;
     
     varying vec3 vLocalPosition;
     varying vec3 vNormal;
@@ -440,19 +444,24 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
       bool isMainFace = false;
       
       if (uIsBacksplash) {
-        // Backsplash: front face has normal pointing in -Z direction
-        isMainFace = vNormal.z < -0.5;
+        // Backsplash: ExtrudeGeometry creates front face with +Z normal (extrusion direction)
+        // After translate(0, 0, -thickness/2), the visible front face has normal +Z
+        isMainFace = vNormal.z > 0.5;
         
         if (isMainFace) {
-          // Project from Z axis
+          // Project from Z axis - X is horizontal, Y is vertical
+          // Map local position to 0-1 UV space
           uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
           uv.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
           
-          // Apply 90° rotation if piece is rotated on tile
+          // If piece is rotated on tile (grainLengthwise=false):
+          // The piece's w (horizontal) becomes pieceH on tile (vertical)
+          // The piece's h (vertical) becomes pieceW on tile (horizontal)
+          // So we need to swap which UV component maps to which tile direction
           if (uIsRotatedOnTile) {
-            vec2 centered = uv - 0.5;
-            uv.x = -centered.y + 0.5;
-            uv.y = centered.x + 0.5;
+            // Swap UV so that mesh X maps to tile Y and mesh Y maps to tile X
+            vec2 swapped = vec2(uv.y, 1.0 - uv.x);
+            uv = swapped;
           }
         }
       } else {
@@ -460,15 +469,19 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
         isMainFace = vNormal.y > 0.5;
         
         if (isMainFace) {
-          // Project from Y axis
+          // Project from Y axis - X is length, Z is depth
+          // Map local position to 0-1 UV space
           uv.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
           uv.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
           
-          // Apply 90° rotation if piece is rotated on tile
+          // If piece is rotated on tile (grainLengthwise=false):
+          // The piece's w (length=X) becomes pieceH on tile (vertical direction)
+          // The piece's h (depth=Z) becomes pieceW on tile (horizontal direction)
+          // So we need to swap which UV component maps to which tile direction
           if (uIsRotatedOnTile) {
-            vec2 centered = uv - 0.5;
-            uv.x = -centered.y + 0.5;
-            uv.y = centered.x + 0.5;
+            // Swap UV so that mesh X maps to tile Y and mesh Z maps to tile X
+            vec2 swapped = vec2(uv.y, 1.0 - uv.x);
+            uv = swapped;
           }
         }
       }
@@ -476,7 +489,52 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
       if (isMainFace) {
         // Map UV from piece space to tile texture space
         vec2 tileUV = uPieceOffset + uv * uPieceScale;
-        gl_FragColor = texture2D(uTexture, tileUV);
+        
+        if (uDebugMode) {
+          // Debug mode: show ENTIRE texture with piece region highlighted
+          // Use local position to show full texture stretched across piece
+          vec2 fullTextureUV;
+          if (uIsBacksplash) {
+            fullTextureUV.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
+            fullTextureUV.y = (vLocalPosition.y / uPieceSize.y) + 0.5;
+          } else {
+            fullTextureUV.x = (vLocalPosition.x / uPieceSize.x) + 0.5;
+            fullTextureUV.y = (vLocalPosition.z / uPieceSize.y) + 0.5;
+          }
+          
+          // Sample full texture (0-1 maps to entire texture)
+          vec4 fullTexColor = texture2D(uTexture, fullTextureUV);
+          
+          // Highlight the actual piece region with a golden border
+          bool inPieceRegion = fullTextureUV.x >= uPieceOffset.x && 
+                               fullTextureUV.x <= uPieceOffset.x + uPieceScale.x &&
+                               fullTextureUV.y >= uPieceOffset.y && 
+                               fullTextureUV.y <= uPieceOffset.y + uPieceScale.y;
+          
+          // Check if near border of piece region
+          float borderWidth = 0.01;
+          bool nearBorder = (abs(fullTextureUV.x - uPieceOffset.x) < borderWidth ||
+                            abs(fullTextureUV.x - (uPieceOffset.x + uPieceScale.x)) < borderWidth ||
+                            abs(fullTextureUV.y - uPieceOffset.y) < borderWidth ||
+                            abs(fullTextureUV.y - (uPieceOffset.y + uPieceScale.y)) < borderWidth) &&
+                           fullTextureUV.x >= uPieceOffset.x - borderWidth && 
+                           fullTextureUV.x <= uPieceOffset.x + uPieceScale.x + borderWidth &&
+                           fullTextureUV.y >= uPieceOffset.y - borderWidth && 
+                           fullTextureUV.y <= uPieceOffset.y + uPieceScale.y + borderWidth;
+          
+          if (nearBorder) {
+            // Golden border around piece region
+            gl_FragColor = vec4(0.79, 0.66, 0.38, 1.0);
+          } else if (inPieceRegion) {
+            // Full opacity inside piece region
+            gl_FragColor = fullTexColor;
+          } else {
+            // 35% opacity outside piece region
+            gl_FragColor = vec4(fullTexColor.rgb, 0.35);
+          }
+        } else {
+          gl_FragColor = texture2D(uTexture, tileUV);
+        }
       } else {
         // Sides and back: solid color
         gl_FragColor = vec4(uSideColor, 1.0);
@@ -497,11 +555,13 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
       uPieceSize: { value: new THREE.Vector2(pieceSizeX, pieceSizeY) },
       uIsBacksplash: { value: isBacksplash },
       uIsRotatedOnTile: { value: isRotatedOnTile },
-      uSideColor: { value: sideColor }
+      uSideColor: { value: sideColor },
+      uDebugMode: { value: debugMode }
     },
     vertexShader,
     fragmentShader,
-    side: THREE.DoubleSide
+    side: THREE.DoubleSide,
+    transparent: debugMode
   });
   
   return material;
@@ -2928,6 +2988,7 @@ function Configurator({ project, onBack }) {
   const [texturePreview, setTexturePreview] = useState(null); // { texture: url, name: string }
   const [texturePreviewVisible, setTexturePreviewVisible] = useState(false); // pentru animație fade
   const [materialWarnings, setMaterialWarnings] = useState([]); // Warnings for archived/missing materials
+  const [debugTexture, setDebugTexture] = useState(false); // Debug mode: show full texture with transparency
   
   // Helper for single selection (backward compatibility)
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
@@ -3074,6 +3135,7 @@ function Configurator({ project, onBack }) {
   const meshesRef = useRef({});
   const orbitRef = useRef({ theta: Math.PI / 4, phi: Math.PI / 3, radius: 6 });
   const saveTimeoutRef = useRef(null);
+  const prevDebugTextureRef = useRef(debugTexture);
   
   // Refs for pending transforms during drag (persists across re-renders)
   const pendingGroupTransformsRef = useRef({});
@@ -4314,9 +4376,12 @@ function Configurator({ project, onBack }) {
       // Check if groupId changed (affects highlight color)
       const groupIdChanged = prevEl && (prevEl.groupId !== el.groupId);
       
+      // Check if debugTexture mode changed (affects material shader)
+      const debugModeChanged = prevDebugTextureRef.current !== debugTexture;
+      
       // If only position/rotation changed, just update the mesh transform
       // But skip if we're dragging - the drag handlers update positions directly
-      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && meshesRef.current[el.id]) {
+      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && !debugModeChanged && meshesRef.current[el.id]) {
         if (!isDraggingRef.current) {
           const mesh = meshesRef.current[el.id];
           const worldPos = getWorldPosition(el);
@@ -4332,8 +4397,9 @@ function Configurator({ project, onBack }) {
       // (so the colored highlights work correctly)
       const hasWaterfall = el.waterfallLeft || el.waterfallRight;
       
+      // If debug mode changed, force full mesh recreation to update shader
       // If only selection or groupId changed and NO waterfall, update outline without recreating
-      if (!isNew && !geometryChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
+      if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         
         // Remove existing outlines (need to collect parent-child pairs)
@@ -4442,7 +4508,8 @@ function Configurator({ project, onBack }) {
           texture.generateMipmaps = true;
           
           // Create triplanar material - uses local coords so no need to update position
-          const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color);
+          // Pass debugTexture flag for debug visualization mode
+          const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color, debugTexture);
           
           // Replace material on mesh
           mesh.material = triplanarMat;
@@ -4642,7 +4709,10 @@ function Configurator({ project, onBack }) {
       newPrevElements[el.id] = { ...el, _wasSelected: isDirectlySelected || isGroupSelected };
     });
     prevElementsRef.current = newPrevElements;
-  }, [elements, selectedIds, library, pieceLayout, groups]);
+    
+    // Update debug texture ref for next comparison
+    prevDebugTextureRef.current = debugTexture;
+  }, [elements, selectedIds, library, pieceLayout, groups, debugTexture]);
 
   // Helper functions
   const getColorById = (id) => library.colors.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
@@ -5041,6 +5111,21 @@ function Configurator({ project, onBack }) {
             <span style={{ color: '#666', fontSize: '13px', marginLeft: '8px' }}>/ {project.name}</span>
           </div>
           {saveStatus && <span style={{ fontSize: '10px', color: '#4a9', marginLeft: '8px' }}>✓ Salvat</span>}
+          <div style={{ width: '1px', height: '20px', background: '#333' }} />
+          <button 
+            onClick={() => setDebugTexture(!debugTexture)} 
+            style={{ 
+              ...toolBtnStyle(debugTexture), 
+              background: debugTexture ? 'rgba(147,112,219,0.2)' : '#1a1a1a', 
+              borderColor: debugTexture ? '#9370db' : '#2a2a2a', 
+              color: debugTexture ? '#9370db' : '#666',
+              fontSize: '11px',
+              padding: '4px 8px'
+            }}
+            title="Afișează textura completă pe piese (pentru debug UV mapping)"
+          >
+            🔍 Debug Textură {debugTexture ? 'ON' : 'OFF'}
+          </button>
         </div>
 
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
