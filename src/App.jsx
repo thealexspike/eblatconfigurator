@@ -3354,6 +3354,11 @@ function Configurator({ project, onBack }) {
   const [debugTexture, setDebugTexture] = useState(false); // Debug mode: show full texture with transparency
   const [manualLayoutPositions, setManualLayoutPositions] = useState(project?.manual_layout_positions || {}); // Manual piece positions from footer drag
   const [forceRenderKey, setForceRenderKey] = useState(0); // Force re-render of all meshes
+  const [showHelpPopup, setShowHelpPopup] = useState(() => {
+    // Show help popup on first visit (check localStorage)
+    const hasSeenHelp = localStorage.getItem('eblat_help_seen');
+    return !hasSeenHelp;
+  });
   
   // Force re-render of all textures on initial load
   useEffect(() => {
@@ -5723,6 +5728,18 @@ function Configurator({ project, onBack }) {
           >
             ↩ Undo
           </button>
+          <div style={{ width: '1px', height: '20px', background: '#333' }} />
+          <button 
+            onClick={() => setShowHelpPopup(true)}
+            style={{ 
+              ...toolBtnStyle(false), 
+              fontSize: '11px',
+              padding: '4px 8px'
+            }}
+            title="Ajutor"
+          >
+            ❓ Ajutor
+          </button>
         </div>
 
         <div style={{ fontSize: '10px', color: '#555' }}>G=Move R=Rotate D=Dup Del=Șterge | Ctrl+Click=Adaugă Shift+Click=Elimină | Ctrl+G=Group Ctrl+X=Ungroup</div>
@@ -8062,6 +8079,105 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                 }}
               >
                 ✓ Trimite Cererea
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Help Popup */}
+      {showHelpPopup && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 10000,
+        }}>
+          <div style={{
+            background: '#1a1a1a',
+            border: '1px solid #333',
+            borderRadius: '12px',
+            maxWidth: '600px',
+            maxHeight: '80vh',
+            overflow: 'auto',
+            padding: '24px',
+            color: '#ddd',
+          }}>
+            <h2 style={{ color: '#c9a962', marginTop: 0, marginBottom: '16px', fontSize: '20px' }}>
+              Bine ai venit în Configuratorul E-Blat!
+            </h2>
+            
+            <div style={{ fontSize: '13px', lineHeight: '1.6' }}>
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Ce face această aplicație?</h3>
+              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+                Configuratorul te ajută să proiectezi blaturi și contrablaturi din piatră, calculând automat câte plăci de material sunt necesare și cum se taie piesele pentru a minimiza risipa.
+              </p>
+              
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Elemente</h3>
+              <p style={{ margin: '0 0 8px 0', color: '#aaa' }}>
+                <strong style={{ color: '#ddd' }}>Blat</strong> - suprafața orizontală (ex: blat bucătărie, insulă)<br/>
+                <strong style={{ color: '#ddd' }}>Contrablat</strong> - panoul vertical de pe perete, deasupra blatului
+              </p>
+              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+                Fiecare element are dimensiuni, grosime și material. Poți adăuga <strong style={{ color: '#ddd' }}>waterfall</strong> (cădere laterală) pentru blaturi de tip insulă - textura continuă de pe blat pe laterale.
+              </p>
+              
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Materiale și Texturi</h3>
+              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+                Alege materialul din galeria de culori. Aplicația afișează textura reală a pietrei și calculează automat orientarea <strong style={{ color: '#ddd' }}>fibrei</strong> pentru continuitate vizuală. Poți <strong style={{ color: '#ddd' }}>roti fibra</strong> cu 90° din panoul de proprietăți.
+              </p>
+              
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Calculul Plăcilor (Footer)</h3>
+              <p style={{ margin: '0 0 8px 0', color: '#aaa' }}>
+                În partea de jos vezi cum se taie piesele din plăcile standard. Algoritmul optimizează automat aranjarea pentru eficiență maximă.
+              </p>
+              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+                <strong style={{ color: '#ddd' }}>Repoziționare manuală:</strong> Ține click lung pe o piesă și trage pentru a o muta. Liniile <span style={{ color: '#00ff88' }}>verzi</span> arată punctele de aliniere locale, iar cele <span style={{ color: '#4a9fff' }}>albastre</span> alinierea cu plăcile vecine.
+              </p>
+              
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Grupuri</h3>
+              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+                Selectează mai multe elemente și grupează-le pentru a le muta/roti împreună. Util când ai un blat cu contrablat care trebuie să rămână aliniate.
+              </p>
+              
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Vizualizare Încadrare</h3>
+              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+                Butonul <strong style={{ color: '#9370db' }}>Vezi Încadrarea</strong> afișează placa întreagă semi-transparent, pentru a vedea exact ce porțiune din textură va fi vizibilă pe piesa finală.
+              </p>
+              
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Salvare</h3>
+              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+                Proiectul se salvează automat la fiecare modificare.
+              </p>
+              
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Scurtături Utile</h3>
+              <p style={{ margin: '0 0 12px 0', color: '#888', fontSize: '12px' }}>
+                <strong>G</strong> = Mutare | <strong>R</strong> = Rotire | <strong>D</strong> = Duplică | <strong>Delete</strong> = Șterge<br/>
+                <strong>Ctrl+C/V</strong> = Copiază/Lipește | <strong>Ctrl+G</strong> = Grupează | <strong>Ctrl+Z</strong> = Anulează
+              </p>
+            </div>
+            
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px', gap: '12px' }}>
+              <button
+                onClick={() => {
+                  localStorage.setItem('eblat_help_seen', 'true');
+                  setShowHelpPopup(false);
+                }}
+                style={{
+                  padding: '10px 24px',
+                  background: '#c9a962',
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#000',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+              >
+                Am înțeles
               </button>
             </div>
           </div>
