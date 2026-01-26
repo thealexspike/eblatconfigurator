@@ -3354,11 +3354,7 @@ function Configurator({ project, onBack }) {
   const [debugTexture, setDebugTexture] = useState(false); // Debug mode: show full texture with transparency
   const [manualLayoutPositions, setManualLayoutPositions] = useState(project?.manual_layout_positions || {}); // Manual piece positions from footer drag
   const [forceRenderKey, setForceRenderKey] = useState(0); // Force re-render of all meshes
-  const [showHelpPopup, setShowHelpPopup] = useState(() => {
-    // Show help popup on first visit (check localStorage)
-    const hasSeenHelp = localStorage.getItem('eblat_help_seen');
-    return !hasSeenHelp;
-  });
+  const [showHelpPopup, setShowHelpPopup] = useState(!localStorage.getItem('eblat_help_seen'));
   
   // Force re-render of all textures on initial load
   useEffect(() => {
