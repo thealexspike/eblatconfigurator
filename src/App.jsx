@@ -8081,97 +8081,126 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
         </div>
       )}
 
-      {/* Help Popup */}
+      {/* Help Modal */}
       {showHelpPopup && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(0,0,0,0.8)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 10000,
-        }}>
-          <div style={{
-            background: '#1a1a1a',
-            border: '1px solid #333',
-            borderRadius: '12px',
-            maxWidth: '600px',
-            maxHeight: '80vh',
-            overflow: 'auto',
-            padding: '24px',
-            color: '#ddd',
-          }}>
-            <h2 style={{ color: '#c9a962', marginTop: 0, marginBottom: '16px', fontSize: '20px' }}>
-              Bine ai venit în Configuratorul E-Blat!
-            </h2>
+        <div 
+          onClick={() => setShowHelpPopup(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#1a1a1a',
+              border: '1px solid #333',
+              borderRadius: '12px',
+              width: '90%',
+              maxWidth: '600px',
+              maxHeight: '85vh',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '16px 20px',
+              borderBottom: '1px solid #333',
+            }}>
+              <h2 style={{ color: '#c9a962', margin: 0, fontSize: '18px', fontWeight: 600 }}>
+                Ghid de Utilizare
+              </h2>
+              <button
+                onClick={() => setShowHelpPopup(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#888',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  padding: '0',
+                  lineHeight: 1,
+                }}
+              >
+                ×
+              </button>
+            </div>
             
-            <div style={{ fontSize: '13px', lineHeight: '1.6' }}>
-              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Ce face această aplicație?</h3>
-              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+            {/* Modal Body */}
+            <div style={{
+              padding: '20px',
+              overflow: 'auto',
+              flex: 1,
+              color: '#ddd',
+              fontSize: '13px',
+              lineHeight: '1.6',
+            }}>
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: 0, marginBottom: '8px' }}>Ce face această aplicație?</h3>
+              <p style={{ margin: '0 0 16px 0', color: '#aaa' }}>
                 Configuratorul te ajută să proiectezi blaturi și contrablaturi din piatră, calculând automat câte plăci de material sunt necesare și cum se taie piesele pentru a minimiza risipa.
               </p>
               
-              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Elemente</h3>
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: 0, marginBottom: '8px' }}>Elemente</h3>
               <p style={{ margin: '0 0 8px 0', color: '#aaa' }}>
                 <strong style={{ color: '#ddd' }}>Blat</strong> - suprafața orizontală (ex: blat bucătărie, insulă)<br/>
                 <strong style={{ color: '#ddd' }}>Contrablat</strong> - panoul vertical de pe perete, deasupra blatului
               </p>
-              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+              <p style={{ margin: '0 0 16px 0', color: '#aaa' }}>
                 Fiecare element are dimensiuni, grosime și material. Poți adăuga <strong style={{ color: '#ddd' }}>waterfall</strong> (cădere laterală) pentru blaturi de tip insulă - textura continuă de pe blat pe laterale.
               </p>
               
-              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Materiale și Texturi</h3>
-              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: 0, marginBottom: '8px' }}>Materiale și Texturi</h3>
+              <p style={{ margin: '0 0 16px 0', color: '#aaa' }}>
                 Alege materialul din galeria de culori. Aplicația afișează textura reală a pietrei și calculează automat orientarea <strong style={{ color: '#ddd' }}>fibrei</strong> pentru continuitate vizuală. Poți <strong style={{ color: '#ddd' }}>roti fibra</strong> cu 90° din panoul de proprietăți.
               </p>
               
-              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Calculul Plăcilor (Footer)</h3>
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: 0, marginBottom: '8px' }}>Calculul Plăcilor (Footer)</h3>
               <p style={{ margin: '0 0 8px 0', color: '#aaa' }}>
                 În partea de jos vezi cum se taie piesele din plăcile standard. Algoritmul optimizează automat aranjarea pentru eficiență maximă.
               </p>
-              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+              <p style={{ margin: '0 0 16px 0', color: '#aaa' }}>
                 <strong style={{ color: '#ddd' }}>Repoziționare manuală:</strong> Ține click lung pe o piesă și trage pentru a o muta. Liniile <span style={{ color: '#00ff88' }}>verzi</span> arată punctele de aliniere locale, iar cele <span style={{ color: '#4a9fff' }}>albastre</span> alinierea cu plăcile vecine.
               </p>
               
-              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Grupuri</h3>
-              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: 0, marginBottom: '8px' }}>Grupuri</h3>
+              <p style={{ margin: '0 0 16px 0', color: '#aaa' }}>
                 Selectează mai multe elemente și grupează-le pentru a le muta/roti împreună. Util când ai un blat cu contrablat care trebuie să rămână aliniate.
               </p>
               
-              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Vizualizare Încadrare</h3>
-              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: 0, marginBottom: '8px' }}>Vizualizare Încadrare</h3>
+              <p style={{ margin: '0 0 16px 0', color: '#aaa' }}>
                 Butonul <strong style={{ color: '#9370db' }}>Vezi Încadrarea</strong> afișează placa întreagă semi-transparent, pentru a vedea exact ce porțiune din textură va fi vizibilă pe piesa finală.
               </p>
               
-              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Salvare</h3>
-              <p style={{ margin: '0 0 12px 0', color: '#aaa' }}>
+              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: 0, marginBottom: '8px' }}>Salvare</h3>
+              <p style={{ margin: '0 0 16px 0', color: '#aaa' }}>
                 Proiectul se salvează automat la fiecare modificare.
               </p>
               
-              <h3 style={{ color: '#fff', fontSize: '14px', marginTop: '16px', marginBottom: '8px' }}>Scurtături Utile</h3>
-              <p style={{ margin: '0 0 12px 0', color: '#888', fontSize: '12px' }}>
-                <strong>G</strong> = Mutare | <strong>R</strong> = Rotire | <strong>D</strong> = Duplică | <strong>Delete</strong> = Șterge<br/>
-                <strong>Ctrl+C/V</strong> = Copiază/Lipește | <strong>Ctrl+G</strong> = Grupează | <strong>Ctrl+Z</strong> = Anulează
-              </p>
-            </div>
-            
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px', gap: '12px' }}>
-              <button
-                onClick={() => setShowHelpPopup(false)}
-                style={{
-                  padding: '10px 24px',
-                  background: '#c9a962',
-                  border: 'none',
-                  borderRadius: '6px',
-                  color: '#000',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  fontSize: '14px',
-                }}
-              >
-                Am înțeles
-              </button>
+              <div style={{ 
+                background: '#252525', 
+                borderRadius: '8px', 
+                padding: '12px 16px',
+                marginTop: '8px',
+              }}>
+                <h3 style={{ color: '#888', fontSize: '12px', marginTop: 0, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Scurtături Tastatură</h3>
+                <p style={{ margin: 0, color: '#666', fontSize: '12px' }}>
+                  <strong style={{ color: '#888' }}>G</strong> = Mutare · <strong style={{ color: '#888' }}>R</strong> = Rotire · <strong style={{ color: '#888' }}>D</strong> = Duplică · <strong style={{ color: '#888' }}>Delete</strong> = Șterge<br/>
+                  <strong style={{ color: '#888' }}>Ctrl+C/V</strong> = Copiază/Lipește · <strong style={{ color: '#888' }}>Ctrl+G</strong> = Grupează · <strong style={{ color: '#888' }}>Ctrl+Z</strong> = Anulează
+                </p>
+              </div>
             </div>
           </div>
         </div>
