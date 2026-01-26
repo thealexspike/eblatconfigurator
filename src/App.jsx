@@ -3354,7 +3354,7 @@ function Configurator({ project, onBack }) {
   const [debugTexture, setDebugTexture] = useState(false); // Debug mode: show full texture with transparency
   const [manualLayoutPositions, setManualLayoutPositions] = useState(project?.manual_layout_positions || {}); // Manual piece positions from footer drag
   const [forceRenderKey, setForceRenderKey] = useState(0); // Force re-render of all meshes
-  const [showHelpPopup, setShowHelpPopup] = useState(!localStorage.getItem('eblat_help_seen'));
+  const [showHelpPopup, setShowHelpPopup] = useState(false); // Help popup - triggered by button only
   
   // Force re-render of all textures on initial load
   useEffect(() => {
@@ -8158,10 +8158,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
             
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px', gap: '12px' }}>
               <button
-                onClick={() => {
-                  localStorage.setItem('eblat_help_seen', 'true');
-                  setShowHelpPopup(false);
-                }}
+                onClick={() => setShowHelpPopup(false)}
                 style={{
                   padding: '10px 24px',
                   background: '#c9a962',
