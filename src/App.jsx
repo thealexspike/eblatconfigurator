@@ -4060,6 +4060,7 @@ function Configurator({ project, onBack }) {
           // Apply snap for first element only, then propagate to others
           if (idx === 0 && snapEnabled) {
             const SNAP_THRESHOLD = 0.10;
+            const WALL_SNAP_THRESHOLD = 0.20; // Stronger snap for walls at origin
             const snapIndicators = [];
             
             // Get dimensions of moving element
@@ -4080,70 +4081,86 @@ function Configurator({ project, onBack }) {
             ];
             
             let snapX = null, snapZ = null;
+            const indicatorY = (el.placementHeight || 0) / 100;
             
-            elements.forEach(other => {
-              if (selectedIds.includes(other.id)) return;
-              
-              const otherPos = getWorldPosDuringDrag(other);
-              const otherRot = (pendingElementTransforms[other.id]?.rotation ?? other.rotation ?? 0) % 360;
-              const otherIsRotated90 = Math.abs(otherRot % 180 - 90) < 5;
-              
-              let otherWidth = other.length / 100;
-              let otherDepth = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
-              if (otherIsRotated90) [otherWidth, otherDepth] = [otherDepth, otherWidth];
-              
-              // Other element's 5 snap points
-              const otherY = (other.placementHeight || 0) / 100;
-              const otherPoints = [
-                { x: otherPos.x - otherWidth / 2, z: otherPos.z - otherDepth / 2, name: 'FL' },
-                { x: otherPos.x + otherWidth / 2, z: otherPos.z - otherDepth / 2, name: 'FR' },
-                { x: otherPos.x - otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BL' },
-                { x: otherPos.x + otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BR' },
-                { x: otherPos.x, z: otherPos.z - otherDepth / 2, name: 'FC' },
-              ];
-              
-              // Determine snap type based on height difference
-              const heightDiff = Math.abs(movingY - otherY);
-              const snapType = heightDiff > 0.01 ? 'warning' : 'element'; // Red if different heights
-              const indicatorY = movingY; // Use height of element being dragged
-              
-              // Check all point combinations for snap
-              movingPoints.forEach(mp => {
-                otherPoints.forEach(op => {
-                  // X snap - align X coordinates of any two points
-                  if (snapX === null && Math.abs(mp.x - op.x) < SNAP_THRESHOLD) {
-                    const deltaX = op.x - mp.x;
-                    snapX = newX + deltaX;
-                    snapIndicators.push({ 
-                      x: op.x, 
-                      z: (mp.z + op.z) / 2, 
-                      axis: 'x', 
-                      y: indicatorY,
-                      type: snapType 
-                    });
-                  }
-                  
-                  // Z snap - align Z coordinates of any two points
-                  if (snapZ === null && Math.abs(mp.z - op.z) < SNAP_THRESHOLD) {
-                    const deltaZ = op.z - mp.z;
-                    snapZ = newZ + deltaZ;
-                    snapIndicators.push({ 
-                      x: (mp.x + op.x) / 2, 
-                      z: op.z, 
-                      axis: 'z', 
-                      y: indicatorY,
-                      type: snapType 
-                    });
-                  }
+            // PRIORITY 1: Wall snap - snap element edge to X=0 or Z=0 (room walls)
+            // Check if left edge is near X=0
+            const leftEdge = newX - movingWidth / 2;
+            if (Math.abs(leftEdge) < WALL_SNAP_THRESHOLD) {
+              snapX = movingWidth / 2; // Position center so left edge is at X=0
+              snapIndicators.push({ x: 0, z: newZ, axis: 'x', y: indicatorY, type: 'grid' });
+            }
+            // Check if back edge is near Z=0
+            const backEdge = newZ - movingDepth / 2;
+            if (Math.abs(backEdge) < WALL_SNAP_THRESHOLD) {
+              snapZ = movingDepth / 2; // Position center so back edge is at Z=0
+              snapIndicators.push({ x: newX, z: 0, axis: 'z', y: indicatorY, type: 'grid' });
+            }
+            
+            // PRIORITY 2: Element snap - if no wall snap, try other elements
+            if (snapX === null || snapZ === null) {
+              elements.forEach(other => {
+                if (selectedIds.includes(other.id)) return;
+                
+                const otherPos = getWorldPosDuringDrag(other);
+                const otherRot = (pendingElementTransforms[other.id]?.rotation ?? other.rotation ?? 0) % 360;
+                const otherIsRotated90 = Math.abs(otherRot % 180 - 90) < 5;
+                
+                let otherWidth = other.length / 100;
+                let otherDepth = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
+                if (otherIsRotated90) [otherWidth, otherDepth] = [otherDepth, otherWidth];
+                
+                // Other element's 5 snap points
+                const otherY = (other.placementHeight || 0) / 100;
+                const otherPoints = [
+                  { x: otherPos.x - otherWidth / 2, z: otherPos.z - otherDepth / 2, name: 'FL' },
+                  { x: otherPos.x + otherWidth / 2, z: otherPos.z - otherDepth / 2, name: 'FR' },
+                  { x: otherPos.x - otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BL' },
+                  { x: otherPos.x + otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BR' },
+                  { x: otherPos.x, z: otherPos.z - otherDepth / 2, name: 'FC' },
+                ];
+                
+                // Determine snap type based on height difference
+                const heightDiff = Math.abs(movingY - otherY);
+                const snapType = heightDiff > 0.01 ? 'warning' : 'element'; // Red if different heights
+                
+                // Check all point combinations for snap
+                movingPoints.forEach(mp => {
+                  otherPoints.forEach(op => {
+                    // X snap - align X coordinates of any two points
+                    if (snapX === null && Math.abs(mp.x - op.x) < SNAP_THRESHOLD) {
+                      const deltaX = op.x - mp.x;
+                      snapX = newX + deltaX;
+                      snapIndicators.push({ 
+                        x: op.x, 
+                        z: (mp.z + op.z) / 2, 
+                        axis: 'x', 
+                        y: indicatorY,
+                        type: snapType 
+                      });
+                    }
+                    
+                    // Z snap - align Z coordinates of any two points
+                    if (snapZ === null && Math.abs(mp.z - op.z) < SNAP_THRESHOLD) {
+                      const deltaZ = op.z - mp.z;
+                      snapZ = newZ + deltaZ;
+                      snapIndicators.push({ 
+                        x: (mp.x + op.x) / 2, 
+                        z: op.z, 
+                        axis: 'z', 
+                        y: indicatorY,
+                        type: snapType 
+                      });
+                    }
+                  });
                 });
               });
-            });
+            }
             
             // Grid snap (if no element snap found) - use blue color
             // Priority: 60cm (kitchen module) > 10cm (fine grid)
             const GRID_60 = 0.6; // 60cm - kitchen module
             const GRID_10 = 0.1; // 10cm - fine grid
-            const indicatorY = (el.placementHeight || 0) / 100;
             
             if (snapX === null) {
               // Try 60cm grid first (stronger snap)
@@ -4979,7 +4996,12 @@ function Configurator({ project, onBack }) {
   }, [tool, selectedIds, elements, groups]);
 
   // Use the shared computeLayout function for texture UV mapping
-  const layoutData = useMemo(() => computeLayout(elements, library, manualLayoutPositions), [elements, library, manualLayoutPositions]);
+  const layoutData = useMemo(() => {
+    if (!library || !library.colors || library.colors.length === 0) {
+      return { pieces: [], tiles: [], piecesByKey: {} };
+    }
+    return computeLayout(elements, library, manualLayoutPositions);
+  }, [elements, library, manualLayoutPositions]);
   
   // pieceLayout for 3D UV mapping - computeLayout already includes fixed positions
   const pieceLayout = layoutData.piecesByKey;
@@ -5573,19 +5595,32 @@ function Configurator({ project, onBack }) {
       defaultThickness = thicknesses.includes(12) ? 12 : (thicknesses[0] || 12);
     }
 
+    // Default dimensions
+    const length = type === 'backsplash' ? 200 : 200;
+    const depth = type === 'backsplash' ? 2 : 60;
+    
+    // Position inside the "room" - offset from origin walls by half-size + margin
+    // This ensures the piece is fully inside the positive quadrant
+    const lengthM = length / 100; // convert cm to meters
+    const depthM = depth / 100;
+    const margin = 0.2; // 20cm margin from walls
+    
     const el = {
       id: generateId(),
       type,
       name: type === 'backsplash' ? 'Contrablat' : 'Blat',
-      length: type === 'backsplash' ? 200 : 200,
-      depth: type === 'backsplash' ? 2 : 60,
+      length,
+      depth,
       height: type === 'backsplash' ? 60 : 90,
       placementHeight: type === 'backsplash' ? 90 : 90,
       thickness: defaultThickness,
       material: firstColor?.id,
       waterfallLeft: false,
       waterfallRight: false,
-      position: { x: (Math.random() - 0.5) * 2, z: (Math.random() - 0.5) * 2 },
+      position: { 
+        x: lengthM / 2 + margin, // Center at x = half-length + margin
+        z: depthM / 2 + margin   // Center at z = half-depth + margin
+      },
       rotation: 0,
     };
 
@@ -7119,7 +7154,13 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
   const getFormatById = (formatId) => library?.formats?.find(f => f.id === formatId);
   
   // Use the shared computeLayout function - SINGLE SOURCE OF TRUTH
-  const { pieces: rawPieces, tiles } = useMemo(() => computeLayout(elements, library, manualPositions), [elements, library, manualPositions]);
+  // Guard inside useMemo to maintain hooks order
+  const { pieces: rawPieces, tiles } = useMemo(() => {
+    if (!library || !library.colors || library.colors.length === 0) {
+      return { pieces: [], tiles: [], piecesByKey: {} };
+    }
+    return computeLayout(elements, library, manualPositions);
+  }, [elements, library, manualPositions]);
   
   // Add sequential numbering to pieces (01, 02, 03, ...)
   const pieces = rawPieces.map((p, idx) => ({
@@ -7557,52 +7598,13 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
     };
   }, []);
   
-  // Early return AFTER hooks
-  if (elements.length === 0) return null;
-  
-  const totalArea = pieces.reduce((s, p) => s + p.w * p.h / 10000, 0);
-  const exceedingPieces = pieces.filter(p => p.exceeds);
-  
-  // Check for cutout errors across all elements
-  const cutoutErrors = [];
-  elements.forEach(el => {
-    if (el.cutouts && el.cutouts.length > 0) {
-      const pieceDepth = el.type === 'backsplash' ? el.height : el.depth;
-      el.cutouts.forEach(cutout => {
-        const validation = validateCutout(cutout, el.length, pieceDepth, el.cutouts);
-        if (!validation.valid) {
-          cutoutErrors.push({ element: el.name, cutout: cutout.name, errors: validation.errors });
-        }
-      });
-    }
-  });
-  const hasCutoutErrors = cutoutErrors.length > 0;
-  
-  const count = tiles.length;
-  
-  // Calculate length totals for blaturi (slabs) and contrablaturi (backsplashes)
-  // Standard: width/height ≤ 70cm, Atypical: > 70cm
-  const slabPieces = pieces.filter(p => p.pieceType === 'slab');
-  const backsplashPieces = pieces.filter(p => p.pieceType === 'backsplash');
-  
-  // Blaturi: pieceW is length on tile, pieceH is depth/width on tile
-  // Use pieceH (actual dimension on tile after rotation) for standard/atypical classification
-  const slabStandard = slabPieces.filter(p => p.pieceH <= 70);
-  const slabAtypical = slabPieces.filter(p => p.pieceH > 70);
-  const slabStandardLength = slabStandard.reduce((sum, p) => sum + p.pieceW, 0) / 100; // in meters
-  const slabAtypicalLength = slabAtypical.reduce((sum, p) => sum + p.pieceW, 0) / 100;
-  
-  // Contrablaturi: pieceW is length on tile, pieceH is height on tile
-  // If rotated (grainLengthwise: false), pieceH becomes the original width which is usually ≤70
-  const backsplashStandard = backsplashPieces.filter(p => p.pieceH <= 70);
-  const backsplashAtypical = backsplashPieces.filter(p => p.pieceH > 70);
-  const backsplashStandardLength = backsplashStandard.reduce((sum, p) => sum + p.pieceW, 0) / 100;
-  const backsplashAtypicalLength = backsplashAtypical.reduce((sum, p) => sum + p.pieceW, 0) / 100;
-  
   // Calculate cutting lengths per tile
   // External cuts: optimized to not count shared edges twice
   // Internal cuts: perimeters of all cutouts
+  // NOTE: Must be before early return to maintain hooks order
   const cuttingStats = useMemo(() => {
+    if (tiles.length === 0) return { external: 0, internal: 0, cutoutCount: 0, cutoutArea: 0 };
+    
     let totalExternalCuts = 0;
     let totalInternalCuts = 0;
     
@@ -7667,30 +7669,27 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
         if (uniqueSegments.length === 0) return 0;
         
         // Merge overlapping/adjacent segments
-        const merged = [];
-        let current = { ...uniqueSegments[0] };
+        let totalLength = 0;
+        let currentStart = uniqueSegments[0].x1 ?? uniqueSegments[0].y1;
+        let currentEnd = uniqueSegments[0].x2 ?? uniqueSegments[0].y2;
         
         for (let i = 1; i < uniqueSegments.length; i++) {
-          const next = uniqueSegments[i];
-          const curEnd = current.x2 ?? current.y2;
-          const nextStart = next.x1 ?? next.y1;
+          const segStart = uniqueSegments[i].x1 ?? uniqueSegments[i].y1;
+          const segEnd = uniqueSegments[i].x2 ?? uniqueSegments[i].y2;
           
-          if (nextStart <= curEnd) {
-            // Overlapping or adjacent - extend current
-            current.x2 = current.x2 !== undefined ? Math.max(current.x2, next.x2) : undefined;
-            current.y2 = current.y2 !== undefined ? Math.max(current.y2, next.y2) : undefined;
+          if (segStart <= currentEnd) {
+            // Overlapping or adjacent - extend current segment
+            currentEnd = Math.max(currentEnd, segEnd);
           } else {
-            merged.push(current);
-            current = { ...next };
+            // Gap - add current segment and start new one
+            totalLength += currentEnd - currentStart;
+            currentStart = segStart;
+            currentEnd = segEnd;
           }
         }
-        merged.push(current);
+        totalLength += currentEnd - currentStart;
         
-        // Calculate total length
-        return merged.reduce((sum, s) => {
-          const len = (s.x2 ?? s.y2) - (s.x1 ?? s.y1);
-          return sum + len;
-        }, 0);
+        return totalLength;
       };
       
       // Sum up all unique horizontal cuts
@@ -7737,6 +7736,46 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
       cutoutArea: cutoutArea / 10000 // convert cm² to m²
     };
   }, [tiles, pieces, elements]);
+  
+  // Calculate values (safe even with empty arrays)
+  const totalArea = pieces.reduce((s, p) => s + p.w * p.h / 10000, 0);
+  const exceedingPieces = pieces.filter(p => p.exceeds);
+  
+  // Check for cutout errors across all elements
+  const cutoutErrors = [];
+  elements.forEach(el => {
+    if (el.cutouts && el.cutouts.length > 0) {
+      const pieceDepth = el.type === 'backsplash' ? el.height : el.depth;
+      el.cutouts.forEach(cutout => {
+        const validation = validateCutout(cutout, el.length, pieceDepth, el.cutouts);
+        if (!validation.valid) {
+          cutoutErrors.push({ element: el.name, cutout: cutout.name, errors: validation.errors });
+        }
+      });
+    }
+  });
+  const hasCutoutErrors = cutoutErrors.length > 0;
+  
+  const count = tiles.length;
+  
+  // Calculate length totals for blaturi (slabs) and contrablaturi (backsplashes)
+  // Standard: width/height ≤ 70cm, Atypical: > 70cm
+  const slabPieces = pieces.filter(p => p.pieceType === 'slab');
+  const backsplashPieces = pieces.filter(p => p.pieceType === 'backsplash');
+  
+  // Blaturi: pieceW is length on tile, pieceH is depth/width on tile
+  // Use pieceH (actual dimension on tile after rotation) for standard/atypical classification
+  const slabStandard = slabPieces.filter(p => p.pieceH <= 70);
+  const slabAtypical = slabPieces.filter(p => p.pieceH > 70);
+  const slabStandardLength = slabStandard.reduce((sum, p) => sum + p.pieceW, 0) / 100; // in meters
+  const slabAtypicalLength = slabAtypical.reduce((sum, p) => sum + p.pieceW, 0) / 100;
+  
+  // Contrablaturi: pieceW is length on tile, pieceH is height on tile
+  // If rotated (grainLengthwise: false), pieceH becomes the original width which is usually ≤70
+  const backsplashStandard = backsplashPieces.filter(p => p.pieceH <= 70);
+  const backsplashAtypical = backsplashPieces.filter(p => p.pieceH > 70);
+  const backsplashStandardLength = backsplashStandard.reduce((sum, p) => sum + p.pieceW, 0) / 100;
+  const backsplashAtypicalLength = backsplashAtypical.reduce((sum, p) => sum + p.pieceW, 0) / 100;
   
   // Group tiles by material type for display
   const tilesByMaterial = {};
@@ -7977,6 +8016,281 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
     }
   };
   
+  // ============================================
+  // DXF EXPORT FUNCTION
+  // ============================================
+  const exportDXF = () => {
+    // DXF uses mm, our data is in cm - convert
+    const CM_TO_MM = 10;
+    
+    // Spacing between tiles in the DXF layout (mm)
+    const TILE_SPACING = 50;
+    
+    // Calculate tile positions (same arrangement as footer - horizontal rows)
+    const tilePositions = [];
+    let currentX = 0;
+    let currentY = 0;
+    let rowMaxHeight = 0;
+    const maxRowWidth = 5000; // Max row width before wrapping (mm)
+    
+    tiles.forEach((tile, tileIdx) => {
+      const tileW = (tile.format?.width || 160) * CM_TO_MM;
+      const tileH = (tile.format?.height || 320) * CM_TO_MM;
+      
+      // Check if we need to wrap to next row
+      if (currentX + tileW > maxRowWidth && currentX > 0) {
+        currentX = 0;
+        currentY -= rowMaxHeight + TILE_SPACING;
+        rowMaxHeight = 0;
+      }
+      
+      tilePositions.push({
+        tileIdx,
+        x: currentX,
+        y: currentY,
+        w: tileW,
+        h: tileH
+      });
+      
+      currentX += tileW + TILE_SPACING;
+      rowMaxHeight = Math.max(rowMaxHeight, tileH);
+    });
+    
+    // DXF Header
+    let dxf = `0
+SECTION
+2
+HEADER
+9
+$ACADVER
+1
+AC1014
+9
+$INSUNITS
+70
+4
+0
+ENDSEC
+0
+SECTION
+2
+TABLES
+0
+TABLE
+2
+LAYER
+70
+3
+0
+LAYER
+2
+PLACI
+70
+0
+62
+8
+6
+CONTINUOUS
+0
+LAYER
+2
+PIESE
+70
+0
+62
+5
+6
+CONTINUOUS
+0
+LAYER
+2
+DECUPAJE
+70
+0
+62
+1
+6
+CONTINUOUS
+0
+ENDTAB
+0
+ENDSEC
+0
+SECTION
+2
+ENTITIES
+`;
+    
+    // Helper to create a closed polyline (LWPOLYLINE)
+    const createPolyline = (points, layer) => {
+      let pl = `0
+LWPOLYLINE
+8
+${layer}
+90
+${points.length}
+70
+1
+`;
+      points.forEach(p => {
+        pl += `10
+${p.x.toFixed(3)}
+20
+${p.y.toFixed(3)}
+`;
+      });
+      return pl;
+    };
+    
+    // Helper to create a circle
+    const createCircle = (cx, cy, radius, layer) => {
+      return `0
+CIRCLE
+8
+${layer}
+10
+${cx.toFixed(3)}
+20
+${cy.toFixed(3)}
+40
+${radius.toFixed(3)}
+`;
+    };
+    
+    // Helper to create rectangle polyline with optional corner radius
+    const createRectangle = (x, y, w, h, cornerRadius, layer) => {
+      if (cornerRadius && cornerRadius > 0) {
+        // Rectangle with rounded corners - approximate with more points
+        const r = Math.min(cornerRadius, w / 2, h / 2);
+        const segments = 8; // segments per corner
+        const points = [];
+        
+        // Bottom left corner
+        for (let i = 0; i <= segments; i++) {
+          const angle = Math.PI + (Math.PI / 2) * (i / segments);
+          points.push({ x: x + r + r * Math.cos(angle), y: y + r + r * Math.sin(angle) });
+        }
+        // Bottom right corner
+        for (let i = 0; i <= segments; i++) {
+          const angle = Math.PI * 1.5 + (Math.PI / 2) * (i / segments);
+          points.push({ x: x + w - r + r * Math.cos(angle), y: y + r + r * Math.sin(angle) });
+        }
+        // Top right corner
+        for (let i = 0; i <= segments; i++) {
+          const angle = 0 + (Math.PI / 2) * (i / segments);
+          points.push({ x: x + w - r + r * Math.cos(angle), y: y + h - r + r * Math.sin(angle) });
+        }
+        // Top left corner
+        for (let i = 0; i <= segments; i++) {
+          const angle = Math.PI / 2 + (Math.PI / 2) * (i / segments);
+          points.push({ x: x + r + r * Math.cos(angle), y: y + h - r + r * Math.sin(angle) });
+        }
+        
+        return createPolyline(points, layer);
+      } else {
+        // Simple rectangle
+        const points = [
+          { x: x, y: y },
+          { x: x + w, y: y },
+          { x: x + w, y: y + h },
+          { x: x, y: y + h }
+        ];
+        return createPolyline(points, layer);
+      }
+    };
+    
+    // Draw tiles (PLACI layer)
+    tilePositions.forEach(tp => {
+      dxf += createRectangle(tp.x, tp.y - tp.h, tp.w, tp.h, 0, 'PLACI');
+    });
+    
+    // Draw pieces (PIESE layer) and cutouts (DECUPAJE layer)
+    piecesWithManualPositions.forEach(p => {
+      const tp = tilePositions[p.tileIndex];
+      if (!tp) return;
+      
+      // Piece position relative to tile (convert from cm to mm)
+      const pieceX = tp.x + p.x * CM_TO_MM;
+      const pieceY = tp.y - tp.h + p.y * CM_TO_MM; // Y is from bottom
+      const pieceW = p.pieceW * CM_TO_MM;
+      const pieceH = p.pieceH * CM_TO_MM;
+      
+      // Draw piece outline
+      dxf += createRectangle(pieceX, pieceY, pieceW, pieceH, 0, 'PIESE');
+      
+      // Draw cutouts if any
+      const element = elements.find(e => e.id === p.elementId);
+      if (element?.cutouts) {
+        element.cutouts.forEach(cutout => {
+          // Get piece dimensions for coordinate conversion
+          const pieceLengthCm = element.type === 'backsplash' ? element.length : element.length;
+          const pieceDepthCm = element.type === 'backsplash' ? element.height : element.depth;
+          
+          // Convert center coords to corner coords
+          // cutout.centerX/Y are relative to piece center
+          // We need to place them correctly considering rotation
+          const isRotated = p.isRotated;
+          
+          if (cutout.type === 'circle') {
+            const radius = (cutout.radius || 1.6) * CM_TO_MM;
+            let cx, cy;
+            
+            if (isRotated) {
+              // Rotated 90° CW: swap and flip
+              cx = pieceX + (pieceDepthCm / 2 + cutout.centerY) * CM_TO_MM;
+              cy = pieceY + (pieceLengthCm / 2 - cutout.centerX) * CM_TO_MM;
+            } else {
+              cx = pieceX + (pieceLengthCm / 2 + cutout.centerX) * CM_TO_MM;
+              cy = pieceY + (pieceDepthCm / 2 + cutout.centerY) * CM_TO_MM;
+            }
+            
+            dxf += createCircle(cx, cy, radius, 'DECUPAJE');
+          } else {
+            // Rectangle cutout
+            const cutW = (cutout.width || 10) * CM_TO_MM;
+            const cutH = (cutout.height || 10) * CM_TO_MM;
+            const cornerR = (cutout.cornerRadius || 0) * CM_TO_MM;
+            
+            let cutX, cutY, drawW, drawH;
+            
+            if (isRotated) {
+              // Rotated: swap dimensions and adjust position
+              cutX = pieceX + (pieceDepthCm / 2 + cutout.centerY) * CM_TO_MM - cutH / 2;
+              cutY = pieceY + (pieceLengthCm / 2 - cutout.centerX) * CM_TO_MM - cutW / 2;
+              drawW = cutH;
+              drawH = cutW;
+            } else {
+              cutX = pieceX + (pieceLengthCm / 2 + cutout.centerX) * CM_TO_MM - cutW / 2;
+              cutY = pieceY + (pieceDepthCm / 2 + cutout.centerY) * CM_TO_MM - cutH / 2;
+              drawW = cutW;
+              drawH = cutH;
+            }
+            
+            dxf += createRectangle(cutX, cutY, drawW, drawH, cornerR, 'DECUPAJE');
+          }
+        });
+      }
+    });
+    
+    // DXF Footer
+    dxf += `0
+ENDSEC
+0
+EOF
+`;
+    
+    // Download the file
+    const blob = new Blob([dxf], { type: 'application/dxf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${project?.name || 'export'}_layout.dxf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+  
   return (
     <div 
       ref={footerRef}
@@ -7990,7 +8304,24 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
         flexShrink: 0,
         position: 'relative',
         zIndex: 100,
+        minHeight: '80px',
     }}>
+      {elements.length === 0 ? (
+        // Empty state
+        <div style={{ 
+          flex: 1, 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'center',
+          color: '#666',
+          fontSize: '13px',
+          padding: '20px',
+        }}>
+          <span style={{ marginRight: '8px' }}>📐</span>
+          Adaugă un blat sau contrablat pentru a vedea încadrarea pe plăci
+        </div>
+      ) : (
+        <>
       {/* Combined Summary Card - Restructured */}
       <div style={{ 
         background: exceedingPieces.length > 0 ? 'rgba(201,98,98,0.1)' : 'rgba(201,169,98,0.1)', 
@@ -8599,6 +8930,27 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
             {footerZoom ? '⊖ Micșorează' : '⊕ Mărește'}
           </button>
           
+          {/* Export DXF Button */}
+          <button 
+            onClick={exportDXF}
+            disabled={tiles.length === 0}
+            style={{ 
+              padding: '14px 20px', 
+              background: 'transparent', 
+              border: '1px solid #666',
+              color: tiles.length === 0 ? '#444' : '#aaa', 
+              fontWeight: 500, 
+              cursor: tiles.length === 0 ? 'not-allowed' : 'pointer',
+              flexShrink: 0,
+              fontSize: '13px',
+              opacity: tiles.length === 0 ? 0.5 : 1,
+              transition: 'all 0.2s ease',
+            }}
+            title="Exportă layout pentru CNC (DXF)"
+          >
+            📐 Export DXF
+          </button>
+          
           {/* Solicita Oferta Button */}
           <button 
             onClick={() => setShowConfirmDialog(true)}
@@ -8636,6 +8988,8 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Confirmation Dialog */}
       {showConfirmDialog && (
