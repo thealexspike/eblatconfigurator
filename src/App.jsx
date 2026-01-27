@@ -7760,6 +7760,14 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
         totalPieces: pieces.length,
         totalArea: parseFloat(totalArea.toFixed(2)),
         totalSlabs: count,
+        overallAvgEfficiency,
+        // Cutting stats
+        cuttingStats: {
+          external: parseFloat(cuttingStats.external.toFixed(2)),
+          internal: parseFloat(cuttingStats.internal.toFixed(2)),
+          cutoutCount: cuttingStats.cutoutCount,
+          cutoutArea: parseFloat(cuttingStats.cutoutArea.toFixed(2)),
+        },
         // Blaturi
         slabStandard: slabStandardLength > 0 ? parseFloat(slabStandardLength.toFixed(2)) : null,
         slabAtypical: slabAtypicalLength > 0 ? parseFloat(slabAtypicalLength.toFixed(2)) : null,
