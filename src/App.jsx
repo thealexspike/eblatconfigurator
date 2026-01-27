@@ -6587,7 +6587,7 @@ function Configurator({ project, onBack }) {
                       return (
                         <div 
                           key={cutout.id} 
-                          onClick={() => setSelectedCutoutId(isCutoutSelected ? null : cutout.id)}
+                          onClick={() => setSelectedCutoutId(cutout.id)}
                           style={{
                             padding: '10px',
                             background: isCutoutSelected ? 'rgba(0, 200, 255, 0.1)' : '#1a1a1a',
@@ -8195,7 +8195,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                         onClick={(e) => {
                                           if (shouldHighlight) {
                                             e.stopPropagation();
-                                            setSelectedCutoutId(selectedCutoutId === cutout.id ? null : cutout.id);
+                                            setSelectedCutoutId(cutout.id);
                                           }
                                         }}
                                         style={{
@@ -8244,7 +8244,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                         onClick={(e) => {
                                           if (shouldHighlight) {
                                             e.stopPropagation();
-                                            setSelectedCutoutId(selectedCutoutId === cutout.id ? null : cutout.id);
+                                            setSelectedCutoutId(cutout.id);
                                           }
                                         }}
                                         style={{
