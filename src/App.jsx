@@ -5453,14 +5453,14 @@ function Configurator({ project, onBack }) {
         
         // Create vertex colors for gradient (bottom darker, top lighter)
         const frontColors = new Float32Array([
-          // Bottom-left (darker)
-          color.r * 0.85, color.g * 0.85, color.b * 0.85,
-          // Bottom-right (darker)
-          color.r * 0.85, color.g * 0.85, color.b * 0.85,
-          // Top-left (lighter)
-          color.r * 1.15, color.g * 1.15, color.b * 1.15,
-          // Top-right (lighter)
-          color.r * 1.15, color.g * 1.15, color.b * 1.15,
+          // Bottom-left (slightly darker)
+          color.r * 0.95, color.g * 0.95, color.b * 0.95,
+          // Bottom-right (slightly darker)
+          color.r * 0.95, color.g * 0.95, color.b * 0.95,
+          // Top-left (slightly lighter)
+          color.r * 1.05, color.g * 1.05, color.b * 1.05,
+          // Top-right (slightly lighter)
+          color.r * 1.05, color.g * 1.05, color.b * 1.05,
         ]);
         frontGeometry.setAttribute('color', new THREE.BufferAttribute(frontColors, 3));
         
