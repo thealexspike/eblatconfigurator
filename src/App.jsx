@@ -1,5 +1,6 @@
 import React, { useState, useEffect, createContext, useContext, useRef, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { createClient } from '@supabase/supabase-js';
 
 // ============================================
@@ -6330,6 +6331,165 @@ function Configurator({ project, onBack }) {
     borderRadius: '4px',
   });
 
+  // ============================================
+  // GLB EXPORT FUNCTION (3D)
+  // ============================================
+  const exportGLB = () => {
+    console.log('exportGLB called', { sceneRef, meshesRef, elements });
+    
+    if (!sceneRef || !sceneRef.current) {
+      showNotification('Scena 3D nu este disponibilă', 'error');
+      console.error('sceneRef not available:', sceneRef);
+      return;
+    }
+    
+    if (!meshesRef || !meshesRef.current || Object.keys(meshesRef.current).length === 0) {
+      showNotification('Nu există elemente de exportat', 'error');
+      console.error('meshesRef not available:', meshesRef);
+      return;
+    }
+    
+    // Create a new scene with only the elements (no grid, lights, etc.)
+    const exportScene = new THREE.Scene();
+    
+    // Clone all element meshes into export scene
+    Object.entries(meshesRef.current).forEach(([id, mesh]) => {
+      const el = elements.find(e => e.id === id);
+      if (!el) return;
+      
+      // Clone the mesh
+      const clonedMesh = mesh.clone();
+      
+      // Remove outline children (LineSegments) - keep only the main geometry
+      const childrenToRemove = [];
+      clonedMesh.traverse((child) => {
+        if (child.isLineSegments || child.isLine) {
+          childrenToRemove.push(child);
+        }
+      });
+      childrenToRemove.forEach(child => {
+        if (child.parent) child.parent.remove(child);
+      });
+      
+      // Set name for the mesh
+      clonedMesh.name = el.name || `Element_${id}`;
+      
+      exportScene.add(clonedMesh);
+    });
+    
+    console.log('Export scene created with', exportScene.children.length, 'objects');
+    
+    // Export using GLTFExporter
+    const exporter = new GLTFExporter();
+    
+    exporter.parse(
+      exportScene,
+      (result) => {
+        // result is an ArrayBuffer for binary GLB
+        const blob = new Blob([result], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        
+        // Create download link
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${project?.name || 'export'}.glb`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        showNotification('Export GLB reușit!', 'success');
+      },
+      (error) => {
+        console.error('GLB export error:', error);
+        showNotification('Eroare la export GLB', 'error');
+      },
+      { binary: true } // Export as binary GLB
+    );
+  };
+
+  // ============================================
+  // EXPORT/IMPORT CONFIGURATION
+  // ============================================
+  const exportConfig = () => {
+    const config = {
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      projectName: project?.name || 'Untitled',
+      elements: elements,
+      groups: groups,
+      manualLayoutPositions: manualLayoutPositions,
+    };
+    
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${project?.name || 'config'}_${new Date().toISOString().split('T')[0]}.eblat.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    showNotification('Configurație exportată!', 'success');
+  };
+  
+  const importConfig = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,.eblat.json';
+    
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const config = JSON.parse(event.target.result);
+          
+          // Validate config structure
+          if (!config.elements || !Array.isArray(config.elements)) {
+            showNotification('Fișier invalid - lipsesc elementele', 'error');
+            return;
+          }
+          
+          // Confirm import
+          const confirmMsg = config.projectName 
+            ? `Importi configurația "${config.projectName}"?\n\nAceasta va înlocui toate elementele existente.`
+            : 'Importi această configurație?\n\nAceasta va înlocui toate elementele existente.';
+          
+          if (!window.confirm(confirmMsg)) return;
+          
+          // Import elements
+          setElements(config.elements);
+          
+          // Import groups if present
+          if (config.groups) {
+            setGroups(config.groups);
+          }
+          
+          // Import manual layout positions if present
+          if (config.manualLayoutPositions) {
+            setManualLayoutPositions(config.manualLayoutPositions);
+          }
+          
+          // Clear selection
+          setSelectedIds([]);
+          
+          showNotification(`Configurație importată: ${config.elements.length} elemente`, 'success');
+        } catch (err) {
+          console.error('Import error:', err);
+          showNotification('Eroare la import - fișier invalid', 'error');
+        }
+      };
+      reader.readAsText(file);
+    };
+    
+    input.click();
+  };
+
   return (
     <div style={{ height: '100vh', background: '#0a0a0a', color: '#fff', fontFamily: 'system-ui', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
@@ -6355,6 +6515,29 @@ function Configurator({ project, onBack }) {
             title="Afișează textura completă pe piese selectate pentru a vedea încadrarea"
           >
             🔍 Vezi Încadrarea {debugTexture ? 'ON' : 'OFF'}
+          </button>
+          <div style={{ width: '1px', height: '20px', background: '#333' }} />
+          <button 
+            onClick={exportConfig}
+            style={{ 
+              ...toolBtnStyle(false),
+              fontSize: '11px',
+              padding: '4px 8px'
+            }}
+            title="Exportă configurația ca fișier JSON"
+          >
+            💾 Export
+          </button>
+          <button 
+            onClick={importConfig}
+            style={{ 
+              ...toolBtnStyle(false),
+              fontSize: '11px',
+              padding: '4px 8px'
+            }}
+            title="Importă configurație din fișier JSON"
+          >
+            📂 Import
           </button>
         </div>
 
@@ -7772,6 +7955,7 @@ function Configurator({ project, onBack }) {
         pushManualLayoutToHistory={pushManualLayoutToHistory}
         selectedCutoutId={selectedCutoutId}
         setSelectedCutoutId={setSelectedCutoutId}
+        exportGLB={exportGLB}
       />
     </div>
   );
@@ -7781,7 +7965,7 @@ function Configurator({ project, onBack }) {
 // SLAB CALCULATOR FOOTER COMPONENT
 // ============================================
 
-function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, supabase, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory, selectedCutoutId, setSelectedCutoutId }) {
+function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, supabase, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory, selectedCutoutId, setSelectedCutoutId, exportGLB }) {
   const [sendingQuote, setSendingQuote] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState(null); // 'success' | 'error' | null
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -9624,9 +9808,86 @@ EOF
         </div>
       </div>
 
-      {/* CTA Buttons */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', gap: '8px' }}>
+      {/* CTA Buttons - Single vertical column */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '4px', flexShrink: 0, padding: '4px 0', minWidth: '100px' }}>
+          {/* Zoom Toggle Button */}
+          <button
+            onClick={() => setFooterZoom(!footerZoom)}
+            style={{
+              padding: '5px 10px',
+              background: 'transparent',
+              border: `1px solid ${footerZoom ? '#c9a962' : '#555'}`,
+              color: footerZoom ? '#c9a962' : '#888',
+              cursor: 'pointer',
+              fontSize: '11px',
+              fontWeight: 600,
+              transition: 'all 0.2s ease',
+            }}
+            title={footerZoom ? 'Micșorează layout' : 'Mărește layout'}
+          >
+            {footerZoom ? '⊖ Zoom -' : '⊕ Zoom +'}
+          </button>
+          
+          {/* Export DXF Button */}
+          <button 
+            onClick={exportDXF}
+            disabled={tiles.length === 0}
+            style={{ 
+              padding: '5px 10px', 
+              background: 'transparent', 
+              border: '1px solid #666',
+              color: tiles.length === 0 ? '#444' : '#aaa', 
+              fontWeight: 500, 
+              cursor: tiles.length === 0 ? 'not-allowed' : 'pointer',
+              fontSize: '11px',
+              opacity: tiles.length === 0 ? 0.5 : 1,
+              transition: 'all 0.2s ease',
+            }}
+            title="Exportă layout pentru CNC (DXF)"
+          >
+            📐 DXF
+          </button>
+          
+          {/* Export GLB Button */}
+          <button 
+            onClick={exportGLB}
+            disabled={elements.length === 0}
+            style={{ 
+              padding: '5px 10px', 
+              background: 'transparent', 
+              border: '1px solid #666',
+              color: elements.length === 0 ? '#444' : '#aaa', 
+              fontWeight: 500, 
+              cursor: elements.length === 0 ? 'not-allowed' : 'pointer',
+              fontSize: '11px',
+              opacity: elements.length === 0 ? 0.5 : 1,
+              transition: 'all 0.2s ease',
+            }}
+            title="Exportă model 3D (GLB)"
+          >
+            🧊 3D
+          </button>
+          
+          {/* Solicita Oferta Button */}
+          <button 
+            onClick={() => setShowConfirmDialog(true)}
+            disabled={sendingQuote || hasCutoutErrors}
+            style={{ 
+              padding: '5px 10px', 
+              background: (sendingQuote || hasCutoutErrors) ? '#1a1a1a' : 'transparent', 
+              border: `1px solid ${hasCutoutErrors ? '#c96262' : '#c9a962'}`,
+              color: hasCutoutErrors ? '#c96262' : '#c9a962', 
+              fontWeight: 600, 
+              cursor: (sendingQuote || hasCutoutErrors) ? 'not-allowed' : 'pointer',
+              fontSize: '11px',
+              opacity: (sendingQuote || hasCutoutErrors) ? 0.7 : 1,
+              transition: 'all 0.2s ease',
+            }}
+            title={hasCutoutErrors ? 'Corectează erorile la decupaje înainte de a trimite oferta' : ''}
+          >
+            {sendingQuote ? '⏳...' : (hasCutoutErrors ? '⛔ Erori' : '📧 Ofertă')}
+          </button>
+          
           {/* Reset Selected - only show if there are selected pieces with manual positions */}
           {(() => {
             const selectedManualKeys = Object.keys(manualPositions).filter(key => {
@@ -9643,12 +9904,12 @@ EOF
                   });
                 }}
                 style={{
-                  padding: '14px 16px',
+                  padding: '5px 10px',
                   background: 'transparent',
                   border: '1px solid #c9a962',
                   color: '#c9a962',
                   cursor: 'pointer',
-                  fontSize: '13px',
+                  fontSize: '11px',
                   fontWeight: 600,
                   transition: 'all 0.2s ease',
                 }}
@@ -9664,12 +9925,12 @@ EOF
             <button
               onClick={() => setManualPositions({})}
               style={{
-                padding: '14px 16px',
+                padding: '5px 10px',
                 background: 'transparent',
                 border: '1px solid #c96262',
                 color: '#c96262',
                 cursor: 'pointer',
-                fontSize: '13px',
+                fontSize: '11px',
                 fontWeight: 600,
                 transition: 'all 0.2s ease',
               }}
@@ -9678,67 +9939,6 @@ EOF
               ↺ Reset All
             </button>
           )}
-          
-          {/* Zoom Toggle Button */}
-          <button
-            onClick={() => setFooterZoom(!footerZoom)}
-            style={{
-              padding: '14px 28px',
-              background: 'transparent',
-              border: `1px solid ${footerZoom ? '#c9a962' : '#555'}`,
-              color: footerZoom ? '#c9a962' : '#888',
-              cursor: 'pointer',
-              fontSize: '13px',
-              fontWeight: 600,
-              transition: 'all 0.2s ease',
-            }}
-            title={footerZoom ? 'Micșorează layout' : 'Mărește layout'}
-          >
-            {footerZoom ? '⊖ Micșorează' : '⊕ Mărește'}
-          </button>
-          
-          {/* Export DXF Button */}
-          <button 
-            onClick={exportDXF}
-            disabled={tiles.length === 0}
-            style={{ 
-              padding: '14px 20px', 
-              background: 'transparent', 
-              border: '1px solid #666',
-              color: tiles.length === 0 ? '#444' : '#aaa', 
-              fontWeight: 500, 
-              cursor: tiles.length === 0 ? 'not-allowed' : 'pointer',
-              flexShrink: 0,
-              fontSize: '13px',
-              opacity: tiles.length === 0 ? 0.5 : 1,
-              transition: 'all 0.2s ease',
-            }}
-            title="Exportă layout pentru CNC (DXF)"
-          >
-            📐 Export DXF
-          </button>
-          
-          {/* Solicita Oferta Button */}
-          <button 
-            onClick={() => setShowConfirmDialog(true)}
-            disabled={sendingQuote || hasCutoutErrors}
-            style={{ 
-              padding: '14px 28px', 
-              background: (sendingQuote || hasCutoutErrors) ? '#1a1a1a' : 'transparent', 
-              border: `1px solid ${hasCutoutErrors ? '#c96262' : '#c9a962'}`,
-              color: hasCutoutErrors ? '#c96262' : '#c9a962', 
-              fontWeight: 600, 
-              cursor: (sendingQuote || hasCutoutErrors) ? 'not-allowed' : 'pointer',
-              flexShrink: 0,
-              fontSize: '13px',
-              opacity: (sendingQuote || hasCutoutErrors) ? 0.7 : 1,
-              transition: 'all 0.2s ease',
-            }}
-            title={hasCutoutErrors ? 'Corectează erorile la decupaje înainte de a trimite oferta' : ''}
-          >
-            {sendingQuote ? '⏳ Se trimite...' : (hasCutoutErrors ? '⛔ Erori decupaje' : 'Solicită Ofertă')}
-          </button>
-        </div>
         {hasCutoutErrors && (
           <div style={{ fontSize: '10px', color: '#c96262', textAlign: 'center', maxWidth: '150px' }}>
             Corectează {cutoutErrors.length} eroare{cutoutErrors.length > 1 ? '' : ''} la decupaje
