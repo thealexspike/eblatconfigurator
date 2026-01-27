@@ -3498,8 +3498,10 @@ function Configurator({ project, onBack }) {
   const [selectedIds, setSelectedIds] = useState([]); // Multi-select support
   const [tool, setTool] = useState('select');
   const [snapEnabled, setSnapEnabled] = useState(true);
+  const [snapThreshold, setSnapThreshold] = useState(10); // in cm
   const [saveStatus, setSaveStatus] = useState(null);
   const [snapIndicators, setSnapIndicators] = useState([]); // [{x, z, type}]
+  const [marqueeRect, setMarqueeRect] = useState(null); // { left, top, width, height }
   const [texturePreview, setTexturePreview] = useState(null); // { texture: url, name: string }
   const [texturePreviewVisible, setTexturePreviewVisible] = useState(false); // pentru animație fade
   const [materialWarnings, setMaterialWarnings] = useState([]); // Warnings for archived/missing materials
@@ -3865,6 +3867,23 @@ function Configurator({ project, onBack }) {
     
     window.getCurrentTool = () => tool;
     
+    window.getSnapThreshold = () => snapThreshold / 100; // Convert cm to meters
+    
+    // Marquee selection functions
+    window.updateMarquee = (rect) => {
+      setMarqueeRect(rect);
+    };
+    
+    window.selectByMarquee = (ids, addToSelection) => {
+      if (addToSelection) {
+        // Add to existing selection
+        setSelectedIds(prev => [...new Set([...prev, ...ids])]);
+      } else {
+        // Replace selection
+        setSelectedIds(ids);
+      }
+    };
+    
     // Use refs for pending transforms (persists across re-renders)
     const pendingGroupTransforms = pendingGroupTransformsRef.current;
     const pendingElementTransforms = pendingElementTransformsRef.current;
@@ -3947,7 +3966,7 @@ function Configurator({ project, onBack }) {
         
         // Snap group elements to other elements (using 5 snap points)
         if (snapEnabled) {
-          const SNAP_THRESHOLD = 0.10;
+          const SNAP_THRESHOLD = window.getSnapThreshold?.() || 0.10;
           const snapIndicators = [];
           let snapDeltaX = null, snapDeltaZ = null;
           
@@ -4065,8 +4084,8 @@ function Configurator({ project, onBack }) {
           
           // Apply snap for first element only, then propagate to others
           if (idx === 0 && snapEnabled) {
-            const SNAP_THRESHOLD = 0.10;
-            const WALL_SNAP_THRESHOLD = 0.20; // Stronger snap for walls at origin
+            const SNAP_THRESHOLD = window.getSnapThreshold?.() || 0.10;
+            const WALL_SNAP_THRESHOLD = SNAP_THRESHOLD * 2; // Stronger snap for walls at origin
             const snapIndicators = [];
             
             // Get dimensions of moving element
@@ -4640,6 +4659,8 @@ function Configurator({ project, onBack }) {
     let isDraggingPan = false;
     let isDraggingElement = false;
     let isRotatingElement = false;
+    let isMarqueeSelecting = false;
+    let marqueeStart = null;
     let prevMouse = { x: 0, y: 0 };
     let dragStartPos = null;
     let draggedElementId = null;
@@ -4737,20 +4758,76 @@ function Configurator({ project, onBack }) {
             draggedElementId = hitElementId;
           }
         } else {
-          // Clicked on empty space - deselect all in select mode
+          // Clicked on empty space - start marquee selection or deselect
           const currentTool = window.getCurrentTool?.() || 'select';
-          if (currentTool === 'select' && !e.ctrlKey && !e.metaKey) {
-            window.deselectAll?.();
+          if (currentTool === 'select' || currentTool === 'move') {
+            // Start marquee selection
+            const rect = canvas.getBoundingClientRect();
+            marqueeStart = { 
+              x: e.clientX - rect.left, 
+              y: e.clientY - rect.top,
+              clientX: e.clientX,
+              clientY: e.clientY
+            };
+            isMarqueeSelecting = true;
+            
+            // Deselect if not holding Ctrl
+            if (!e.ctrlKey && !e.metaKey) {
+              window.deselectAll?.();
+            }
           }
         }
       }
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e) => {
       // Commit any pending position/rotation changes to React state
       if (isDraggingElement || isRotatingElement) {
         window.commitElementChanges?.();
       }
+      
+      // Finish marquee selection
+      if (isMarqueeSelecting && marqueeStart) {
+        const rect = canvas.getBoundingClientRect();
+        const endX = e.clientX - rect.left;
+        const endY = e.clientY - rect.top;
+        
+        // Calculate marquee bounds in screen space
+        const minX = Math.min(marqueeStart.x, endX);
+        const maxX = Math.max(marqueeStart.x, endX);
+        const minY = Math.min(marqueeStart.y, endY);
+        const maxY = Math.max(marqueeStart.y, endY);
+        
+        // Only select if marquee is bigger than 5px (to avoid accidental clicks)
+        if (maxX - minX > 5 || maxY - minY > 5) {
+          // Find elements within marquee
+          const selectedByMarquee = [];
+          
+          Object.entries(meshesRef.current).forEach(([id, mesh]) => {
+            // Get mesh center in screen coordinates
+            const worldPos = new THREE.Vector3();
+            mesh.getWorldPosition(worldPos);
+            
+            // Project to screen
+            const screenPos = worldPos.clone().project(camera);
+            const screenX = (screenPos.x + 1) / 2 * rect.width;
+            const screenY = (-screenPos.y + 1) / 2 * rect.height;
+            
+            // Check if within marquee
+            if (screenX >= minX && screenX <= maxX && screenY >= minY && screenY <= maxY) {
+              selectedByMarquee.push(id);
+            }
+          });
+          
+          if (selectedByMarquee.length > 0) {
+            window.selectByMarquee?.(selectedByMarquee, e.ctrlKey || e.metaKey);
+          }
+        }
+        
+        // Hide marquee rectangle
+        window.updateMarquee?.(null);
+      }
+      
       // Clear snap indicators
       window.clearSnapIndicators?.();
       // Clear duplicate flag
@@ -4760,6 +4837,8 @@ function Configurator({ project, onBack }) {
       isDraggingPan = false;
       isDraggingElement = false;
       isRotatingElement = false;
+      isMarqueeSelecting = false;
+      marqueeStart = null;
       draggedElementId = null;
       dragStartPos = null;
     };
@@ -4767,6 +4846,21 @@ function Configurator({ project, onBack }) {
     const handleMouseMove = (e) => {
       const dx = e.clientX - prevMouse.x;
       const dy = e.clientY - prevMouse.y;
+      
+      // Update marquee rectangle if selecting
+      if (isMarqueeSelecting && marqueeStart) {
+        const rect = canvas.getBoundingClientRect();
+        const currentX = e.clientX - rect.left;
+        const currentY = e.clientY - rect.top;
+        
+        window.updateMarquee?.({
+          left: Math.min(marqueeStart.x, currentX),
+          top: Math.min(marqueeStart.y, currentY),
+          width: Math.abs(currentX - marqueeStart.x),
+          height: Math.abs(currentY - marqueeStart.y)
+        });
+        return;
+      }
       
       if (isDraggingOrbit) {
         orbitRef.current.theta += dx * 0.005;  // Reversed direction, slower
@@ -5053,6 +5147,8 @@ function Configurator({ project, onBack }) {
       thickness: el.thickness,
       material: el.material,
       color: el.color,  // For cabinet
+      doors: el.doors,  // For cabinet division lines
+      drawers: el.drawers,  // For cabinet division lines
       placementHeight: el.placementHeight,
       waterfallLeft: el.waterfallLeft,
       waterfallRight: el.waterfallRight,
@@ -5390,6 +5486,56 @@ function Configurator({ project, onBack }) {
         }
         
         mesh.userData = { elementId: el.id, type: 'cabinet' };
+        
+        // Add division lines for doors (vertical) and drawers (horizontal)
+        const numDoors = el.doors || 0;
+        const numDrawers = el.drawers || 0;
+        
+        if (numDoors > 1 || numDrawers > 1) {
+          const divisionLineMaterial = new THREE.LineBasicMaterial({ 
+            color: 0x000000, 
+            linewidth: 1,
+            depthTest: true
+          });
+          
+          // Front face is at z = -cabinetDepth/2 (local coords)
+          const frontZ = -cabinetDepth / 2 - 0.001; // Slightly in front to avoid z-fighting
+          const hw = cabinetWidth / 2;
+          const hh = cabinetHeight / 2;
+          
+          if (numDoors > 1) {
+            // Vertical lines for doors
+            const numLines = numDoors - 1;
+            for (let i = 1; i <= numLines; i++) {
+              const x = -hw + (cabinetWidth * i / numDoors);
+              const points = [
+                new THREE.Vector3(x, -hh, frontZ),
+                new THREE.Vector3(x, hh, frontZ)
+              ];
+              const lineGeom = new THREE.BufferGeometry().setFromPoints(points);
+              const line = new THREE.Line(lineGeom, divisionLineMaterial);
+              line.raycast = () => {};
+              mesh.add(line);
+            }
+          }
+          
+          if (numDrawers > 1) {
+            // Horizontal lines for drawers
+            const numLines = numDrawers - 1;
+            for (let i = 1; i <= numLines; i++) {
+              const y = -hh + (cabinetHeight * i / numDrawers);
+              const points = [
+                new THREE.Vector3(-hw, y, frontZ),
+                new THREE.Vector3(hw, y, frontZ)
+              ];
+              const lineGeom = new THREE.BufferGeometry().setFromPoints(points);
+              const line = new THREE.Line(lineGeom, divisionLineMaterial);
+              line.raycast = () => {};
+              mesh.add(line);
+            }
+          }
+        }
+        
         sceneRef.current.add(mesh);
         meshesRef.current[el.id] = mesh;
         
@@ -5966,6 +6112,26 @@ function Configurator({ project, onBack }) {
     }
   };
 
+  // Generate unique name for copies - uses number suffix
+  const generateCopyName = (baseName, existingElements) => {
+    // Remove existing copy suffix like " (2)", " (3)" etc.
+    const cleanName = baseName.replace(/\s*\(\d+\)\s*$/, '').replace(/\s*\(copie\)\s*$/i, '').trim();
+    
+    // Find all elements with similar names and get max number
+    let maxNum = 0;
+    existingElements.forEach(el => {
+      if (el.name === cleanName) {
+        maxNum = Math.max(maxNum, 1);
+      }
+      const match = el.name.match(new RegExp(`^${cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\((\\d+)\\)$`));
+      if (match) {
+        maxNum = Math.max(maxNum, parseInt(match[1]));
+      }
+    });
+    
+    return `${cleanName} (${maxNum + 1})`;
+  };
+
   const duplicateElement = (id) => {
     const el = elements.find(e => e.id === id);
     if (!el) return;
@@ -5977,7 +6143,7 @@ function Configurator({ project, onBack }) {
     const newEl = {
       ...el,
       id: generateId(),
-      name: `${el.name} (copie)`,
+      name: generateCopyName(el.name, elements),
       position: { x: worldPos.x + 0.3, z: worldPos.z + 0.3 },
       rotation: worldRot,
       // Remove group info for duplicated element
@@ -6038,17 +6204,23 @@ function Configurator({ project, onBack }) {
       return;
     }
     
-    const newElements = clipboard.map(el => ({
-      ...el,
-      id: generateId(),
-      name: `${el.name} (copie)`,
-      position: { 
-        x: (el.position?.x || 0) + 0.3, 
-        z: (el.position?.z || 0) + 0.3 
-      },
-      // Regenerate cutout IDs to avoid duplicates
-      cutouts: el.cutouts?.map(c => ({ ...c, id: Math.random().toString(36).substr(2, 9) }))
-    }));
+    // Build list including current elements for name generation
+    let allElements = [...elements];
+    const newElements = clipboard.map(el => {
+      const newEl = {
+        ...el,
+        id: generateId(),
+        name: generateCopyName(el.name, allElements),
+        position: { 
+          x: (el.position?.x || 0) + 0.3, 
+          z: (el.position?.z || 0) + 0.3 
+        },
+        // Regenerate cutout IDs to avoid duplicates
+        cutouts: el.cutouts?.map(c => ({ ...c, id: Math.random().toString(36).substr(2, 9) }))
+      };
+      allElements.push(newEl); // Add to list for next name generation
+      return newEl;
+    });
     
     setElements([...elements, ...newElements]);
     setSelectedIds(newElements.map(el => el.id));
@@ -6196,6 +6368,31 @@ function Configurator({ project, onBack }) {
           <button onClick={() => setSnapEnabled(!snapEnabled)} style={{ ...toolBtnStyle(snapEnabled), background: snapEnabled ? 'rgba(74,153,74,0.2)' : '#1a1a1a', borderColor: snapEnabled ? '#4a9' : '#2a2a2a', color: snapEnabled ? '#4a9' : '#666' }}>
             ⊞ Snap {snapEnabled ? 'ON' : 'OFF'}
           </button>
+          {snapEnabled && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <select 
+                value={snapThreshold} 
+                onChange={e => setSnapThreshold(Number(e.target.value))}
+                style={{
+                  background: '#1a1a1a',
+                  border: '1px solid #333',
+                  color: '#4a9',
+                  fontSize: '11px',
+                  padding: '4px 6px',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+                title="Snap threshold (cm)"
+              >
+                <option value={5}>5cm</option>
+                <option value={10}>10cm</option>
+                <option value={15}>15cm</option>
+                <option value={20}>20cm</option>
+                <option value={25}>25cm</option>
+                <option value={50}>50cm</option>
+              </select>
+            </div>
+          )}
           <button 
             onClick={undo} 
             disabled={undoHistory.length === 0}
@@ -6368,6 +6565,21 @@ function Configurator({ project, onBack }) {
         {/* Center - 3D View */}
         <div style={{ flex: 1, position: 'relative', background: '#111', minWidth: 0 }}>
           <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+          
+          {/* Marquee Selection Rectangle */}
+          {marqueeRect && (
+            <div style={{
+              position: 'absolute',
+              left: marqueeRect.left,
+              top: marqueeRect.top,
+              width: marqueeRect.width,
+              height: marqueeRect.height,
+              border: '1px solid #c9a962',
+              background: 'rgba(201, 169, 98, 0.1)',
+              pointerEvents: 'none',
+              zIndex: 50,
+            }} />
+          )}
           
           {/* Notifications Stack */}
           {notifications.length > 0 && (
@@ -6566,6 +6778,40 @@ function Configurator({ project, onBack }) {
                   </div>
                 </div>
 
+                {/* Doors & Drawers Section */}
+                <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                  <div style={{ fontSize: '10px', color: '#888', marginBottom: '10px', fontWeight: 600 }}>🚪 UȘI & SERTARE</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Uși (verticale)</label>
+                      <NumericInput 
+                        value={selected.doors || 0} 
+                        onChange={v => updateElement(selected.id, { doors: v, drawers: v > 0 ? 0 : selected.drawers })} 
+                        min={0} 
+                        max={10}
+                        style={{ ...inputStyle, padding: '8px' }} 
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Sertare (orizontale)</label>
+                      <NumericInput 
+                        value={selected.drawers || 0} 
+                        onChange={v => updateElement(selected.id, { drawers: v, doors: v > 0 ? 0 : selected.doors })} 
+                        min={0} 
+                        max={10}
+                        style={{ ...inputStyle, padding: '8px' }} 
+                      />
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '9px', color: '#666', marginTop: '8px' }}>
+                    {selected.doors > 1 && `${selected.doors - 1} linie verticală`}
+                    {selected.doors > 2 && 'e'}
+                    {selected.drawers > 1 && `${selected.drawers - 1} linie orizontală`}
+                    {selected.drawers > 2 && 'e'}
+                    {!selected.doors && !selected.drawers && 'Setează numărul de uși sau sertare'}
+                  </div>
+                </div>
+
                 {/* Color Section */}
                 <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
                   <div style={{ fontSize: '10px', color: '#888', marginBottom: '10px', fontWeight: 600 }}>🎨 CULOARE</div>
@@ -6607,6 +6853,68 @@ function Configurator({ project, onBack }) {
                         }}
                       />
                     ))}
+                  </div>
+                </div>
+
+                {/* Position Section */}
+                <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                  <div style={{ fontSize: '10px', color: '#888', marginBottom: '10px', fontWeight: 600 }}>📍 POZIȚIE</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>X (cm)</label>
+                      <NumericInput 
+                        value={Math.round(getWorldPosition(selected).x * 100)} 
+                        onChange={v => {
+                          if (selected.groupId) {
+                            // For grouped elements, update localOffset
+                            const group = groups[selected.groupId];
+                            if (group) {
+                              const newLocalX = v / 100 - group.position.x;
+                              updateElement(selected.id, { localOffset: { ...selected.localOffset, x: newLocalX } });
+                            }
+                          } else {
+                            updateElement(selected.id, { position: { ...selected.position, x: v / 100 } });
+                          }
+                        }} 
+                        style={{ ...inputStyle, padding: '8px' }} 
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Z (cm)</label>
+                      <NumericInput 
+                        value={Math.round(getWorldPosition(selected).z * 100)} 
+                        onChange={v => {
+                          if (selected.groupId) {
+                            const group = groups[selected.groupId];
+                            if (group) {
+                              const newLocalZ = v / 100 - group.position.z;
+                              updateElement(selected.id, { localOffset: { ...selected.localOffset, z: newLocalZ } });
+                            }
+                          } else {
+                            updateElement(selected.id, { position: { ...selected.position, z: v / 100 } });
+                          }
+                        }} 
+                        style={{ ...inputStyle, padding: '8px' }} 
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Rotație (°)</label>
+                      <NumericInput 
+                        value={Math.round(getWorldRotation(selected))} 
+                        onChange={v => {
+                          if (selected.groupId) {
+                            const group = groups[selected.groupId];
+                            if (group) {
+                              const newLocalRot = v - (group.rotation || 0);
+                              updateElement(selected.id, { localRotation: newLocalRot });
+                            }
+                          } else {
+                            updateElement(selected.id, { rotation: v });
+                          }
+                        }} 
+                        style={{ ...inputStyle, padding: '8px' }} 
+                      />
+                    </div>
                   </div>
                 </div>
 
