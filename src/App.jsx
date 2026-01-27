@@ -5333,7 +5333,7 @@ function Configurator({ project, onBack }) {
             if (child.isMesh && child.geometry && !child.userData?.isDebugTileHelper) {
               const edges = new THREE.EdgesGeometry(child.geometry, 15);
               const lineMaterial = new THREE.LineBasicMaterial({ 
-                color: 0x404040, 
+                color: 0x303030, 
                 linewidth: 2,
                 depthTest: true,  // Not x-ray - respects depth
                 transparent: false
@@ -5448,6 +5448,31 @@ function Configurator({ project, onBack }) {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         
+        // Add gradient front face overlay
+        const frontGeometry = new THREE.PlaneGeometry(cabinetWidth, cabinetHeight);
+        
+        // Create vertex colors for gradient (bottom darker, top lighter)
+        const frontColors = new Float32Array([
+          // Bottom-left (darker)
+          color.r * 0.85, color.g * 0.85, color.b * 0.85,
+          // Bottom-right (darker)
+          color.r * 0.85, color.g * 0.85, color.b * 0.85,
+          // Top-left (lighter)
+          color.r * 1.15, color.g * 1.15, color.b * 1.15,
+          // Top-right (lighter)
+          color.r * 1.15, color.g * 1.15, color.b * 1.15,
+        ]);
+        frontGeometry.setAttribute('color', new THREE.BufferAttribute(frontColors, 3));
+        
+        const frontMaterial = new THREE.MeshBasicMaterial({ 
+          vertexColors: true,
+          side: THREE.FrontSide
+        });
+        const frontFace = new THREE.Mesh(frontGeometry, frontMaterial);
+        frontFace.position.z = cabinetDepth / 2 + 0.0005; // Slightly in front
+        frontFace.raycast = () => {}; // Don't interfere with selection
+        mesh.add(frontFace);
+        
         // Position
         const worldPos = getWorldPosition(el);
         const worldRot = getWorldRotation(el);
@@ -5475,7 +5500,7 @@ function Configurator({ project, onBack }) {
         } else {
           // Not selected: black, not x-ray
           const lineMaterial = new THREE.LineBasicMaterial({ 
-            color: 0x404040, 
+            color: 0x303030, 
             linewidth: 2,
             depthTest: true,  // Not x-ray
             transparent: false
@@ -5493,13 +5518,13 @@ function Configurator({ project, onBack }) {
         
         if (numDoors > 1 || numDrawers > 1) {
           const divisionLineMaterial = new THREE.LineBasicMaterial({ 
-            color: 0x000000, 
+            color: 0x303030, 
             linewidth: 1,
             depthTest: true
           });
           
-          // Front face is at z = -cabinetDepth/2 (local coords)
-          const frontZ = -cabinetDepth / 2 - 0.001; // Slightly in front to avoid z-fighting
+          // Front face is at z = +cabinetDepth/2 (local coords) - facing the user
+          const frontZ = cabinetDepth / 2 + 0.001; // Slightly in front to avoid z-fighting
           const hw = cabinetWidth / 2;
           const hh = cabinetHeight / 2;
           
@@ -6788,7 +6813,7 @@ function Configurator({ project, onBack }) {
                         value={selected.doors || 0} 
                         onChange={v => updateElement(selected.id, { doors: v, drawers: v > 0 ? 0 : selected.drawers })} 
                         min={0} 
-                        max={10}
+                        max={3}
                         style={{ ...inputStyle, padding: '8px' }} 
                       />
                     </div>
@@ -6798,7 +6823,7 @@ function Configurator({ project, onBack }) {
                         value={selected.drawers || 0} 
                         onChange={v => updateElement(selected.id, { drawers: v, doors: v > 0 ? 0 : selected.doors })} 
                         min={0} 
-                        max={10}
+                        max={5}
                         style={{ ...inputStyle, padding: '8px' }} 
                       />
                     </div>
