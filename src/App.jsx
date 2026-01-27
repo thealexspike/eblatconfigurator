@@ -1897,6 +1897,7 @@ function AuthProvider({ children }) {
       id: supabaseUser.id,
       email: supabaseUser.email,
       name: profile?.name || supabaseUser.user_metadata?.name || supabaseUser.email?.split('@')[0],
+      phone: profile?.phone || supabaseUser.user_metadata?.phone || null,
       isAdmin: isAdminEmail(supabaseUser.email) || 
                supabaseUser.user_metadata?.isAdmin === true || 
                profile?.is_admin === true,
@@ -1908,7 +1909,7 @@ function AuthProvider({ children }) {
     try {
       const { data } = await supabase
         .from('profiles')
-        .select('name, is_admin')
+        .select('name, phone, is_admin')
         .eq('id', userId)
         .single();
       return data;
@@ -6937,6 +6938,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
   const [sendingQuote, setSendingQuote] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState(null); // 'success' | 'error' | null
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [tempPhone, setTempPhone] = useState(''); // Phone input for users without phone in profile
   const [footerZoom, setFooterZoom] = useState(false); // Footer zoom x2
   
   // Drag state (local - only for visual feedback during drag)
@@ -7758,6 +7760,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
         projectDescription: project?.description || '',
         userName: user?.name || '',
         userEmail: user?.email || '',
+        userPhone: user?.phone || tempPhone || '',
         // Stats
         totalPieces: pieces.length,
         totalArea: parseFloat(totalArea.toFixed(2)),
@@ -8507,9 +8510,46 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                 </>
               )}
             </div>
+            
+            {/* Phone input - only show if user doesn't have phone in profile */}
+            {!user?.phone && (
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ display: 'block', color: '#888', fontSize: '12px', marginBottom: '8px' }}>
+                  Număr de telefon <span style={{ color: '#c96262' }}>*</span>
+                </label>
+                <input
+                  type="tel"
+                  value={tempPhone}
+                  onChange={(e) => setTempPhone(e.target.value)}
+                  placeholder="ex: 0722 123 456"
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    background: '#0d0d0d',
+                    border: `1px solid ${!tempPhone.trim() ? '#c96262' : '#333'}`,
+                    borderRadius: '8px',
+                    color: '#fff',
+                    fontSize: '14px',
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = '#c9a962'}
+                  onBlur={(e) => e.target.style.borderColor = !tempPhone.trim() ? '#c96262' : '#333'}
+                />
+                {!tempPhone.trim() && (
+                  <div style={{ color: '#c96262', fontSize: '11px', marginTop: '6px' }}>
+                    Numărul de telefon este obligatoriu pentru a putea fi contactat
+                  </div>
+                )}
+              </div>
+            )}
+            
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
               <button
-                onClick={() => setShowConfirmDialog(false)}
+                onClick={() => {
+                  setShowConfirmDialog(false);
+                  setTempPhone('');
+                }}
                 style={{
                   padding: '12px 24px',
                   background: 'transparent',
@@ -8527,14 +8567,16 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                   setShowConfirmDialog(false);
                   sendQuoteRequest();
                 }}
+                disabled={!user?.phone && !tempPhone.trim()}
                 style={{
                   padding: '12px 24px',
-                  background: '#c9a962',
+                  background: (!user?.phone && !tempPhone.trim()) ? '#444' : '#c9a962',
                   border: 'none',
-                  color: '#000',
+                  color: (!user?.phone && !tempPhone.trim()) ? '#888' : '#000',
                   borderRadius: '6px',
-                  cursor: 'pointer',
+                  cursor: (!user?.phone && !tempPhone.trim()) ? 'not-allowed' : 'pointer',
                   fontWeight: 600,
+                  opacity: (!user?.phone && !tempPhone.trim()) ? 0.7 : 1,
                 }}
               >
                 ✓ Trimite Cererea
