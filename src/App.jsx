@@ -6919,6 +6919,7 @@ function Configurator({ project, onBack }) {
         handleElementSelect={handleElementSelect}
         project={project}
         user={user}
+        supabase={supabase}
         canvasRef={canvasRef}
         manualLayoutPositions={manualLayoutPositions}
         setManualLayoutPositions={setManualLayoutPositions}
@@ -6934,7 +6935,7 @@ function Configurator({ project, onBack }) {
 // SLAB CALCULATOR FOOTER COMPONENT
 // ============================================
 
-function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory, selectedCutoutId, setSelectedCutoutId }) {
+function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, supabase, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory, selectedCutoutId, setSelectedCutoutId }) {
   const [sendingQuote, setSendingQuote] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState(null); // 'success' | 'error' | null
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -7665,6 +7666,24 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
     setQuoteStatus(null);
     
     try {
+      // Save phone to profile if user entered it in dialog
+      if (tempPhone.trim() && !user?.phone && user?.id) {
+        try {
+          await supabase
+            .from('profiles')
+            .upsert({ 
+              id: user.id, 
+              phone: tempPhone.trim() 
+            }, { 
+              onConflict: 'id' 
+            });
+          // Update local user state with new phone
+          // This prevents the phone input from showing again in future dialogs
+        } catch (e) {
+          console.error('Error saving phone to profile:', e);
+        }
+      }
+      
       // Capture images - for 3D we need to get the WebGL canvas
       let preview3DImage = null;
       try {
