@@ -373,6 +373,41 @@ function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [],
 }
 
 /**
+ * Get cutout position in mesh-local 3D coordinates
+ * Matches the coordinate transformation used in createGeometryWithCutouts
+ */
+function getCutout3DPosition(cutout, thicknessMm, isBacksplash) {
+  const thickness = thicknessMm / 1000; // meters
+  const cx = cutout.center.x / 100; // meters - same as boolean
+  const cz = cutout.center.z / 100; // meters - same as boolean
+  
+  if (isBacksplash) {
+    // Backsplash: XY plane, cutout at (cx, cz) on front face
+    return { x: cx, y: cz, z: thickness / 2 + 0.002 };
+  } else {
+    // Slab: after rotateX(-PI/2), shape Y becomes -Z in mesh space
+    // So cutout at (cx, cz) in shape becomes (cx, thickness, -cz) in mesh
+    return { x: cx, y: thickness + 0.002, z: -cz };
+  }
+}
+
+/**
+ * Get cutout dimensions in meters
+ */
+function getCutoutDimensions(cutout) {
+  if (cutout.type === 'circle') {
+    const r = (cutout.radius || 0) / 100;
+    return { type: 'circle', radius: r };
+  } else {
+    return {
+      type: 'rectangle',
+      width: (cutout.width || 0) / 100,
+      height: (cutout.height || 0) / 100
+    };
+  }
+}
+
+/**
  * Creates a triplanar shader material for proper texture mapping
  * Uses LOCAL coordinates so texture stays fixed when piece is rotated/moved
  * Handles grainLengthwise rotation (90° UV rotation when piece is rotated on tile)
@@ -3354,6 +3389,8 @@ function Configurator({ project, onBack }) {
   const [debugTexture, setDebugTexture] = useState(false); // Debug mode: show full texture with transparency
   const [manualLayoutPositions, setManualLayoutPositions] = useState(project?.manual_layout_positions || {}); // Manual piece positions from footer drag
   const [forceRenderKey, setForceRenderKey] = useState(0); // Force re-render of all meshes
+  const [selectedCutoutId, setSelectedCutoutId] = useState(null); // Selected cutout for highlighting
+  const [editingCutoutNameId, setEditingCutoutNameId] = useState(null); // Cutout being renamed
   
   // Force re-render of all textures on initial load
   useEffect(() => {
@@ -3415,6 +3452,11 @@ function Configurator({ project, onBack }) {
       });
     }
   }, [elements]);
+  
+  // Reset selected cutout when element selection changes
+  useEffect(() => {
+    setSelectedCutoutId(null);
+  }, [selectedIds]);
   
   // Helper for single selection (backward compatibility)
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
@@ -3584,6 +3626,7 @@ function Configurator({ project, onBack }) {
   const orbitRef = useRef({ theta: Math.PI / 4, phi: Math.PI / 3, radius: 6 });
   const saveTimeoutRef = useRef(null);
   const prevDebugTextureRef = useRef(debugTexture);
+  const prevSelectedCutoutIdRef = useRef(selectedCutoutId);
   
   // Refs for pending transforms during drag (persists across re-renders)
   const pendingGroupTransformsRef = useRef({});
@@ -4887,6 +4930,9 @@ function Configurator({ project, onBack }) {
       // Check if debugTexture mode changed (affects material shader)
       const debugModeChanged = prevDebugTextureRef.current !== debugTexture;
       
+      // Check if selected cutout changed (affects cutout highlight)
+      const cutoutSelectionChanged = prevSelectedCutoutIdRef.current !== selectedCutoutId;
+      
       // Check if layout changed (affects UV mapping)
       const currentLayoutHash = getLayoutHash(el.id);
       const prevLayoutHash = prevLayoutRef.current[el.id];
@@ -4894,7 +4940,7 @@ function Configurator({ project, onBack }) {
       
       // If only position/rotation changed, just update the mesh transform
       // But skip if we're dragging - the drag handlers update positions directly
-      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && !debugModeChanged && !layoutChanged && meshesRef.current[el.id]) {
+      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && !debugModeChanged && !layoutChanged && !cutoutSelectionChanged && meshesRef.current[el.id]) {
         if (!isDraggingRef.current) {
           const mesh = meshesRef.current[el.id];
           const worldPos = getWorldPosition(el);
@@ -4911,14 +4957,14 @@ function Configurator({ project, onBack }) {
       const hasWaterfall = el.waterfallLeft || el.waterfallRight;
       
       // If debug mode changed, force full mesh recreation to update shader
-      // If only selection or groupId changed and NO waterfall, update outline without recreating
-      if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged) && !hasWaterfall && meshesRef.current[el.id]) {
+      // If only selection or groupId or cutout selection changed and NO waterfall, update outline without recreating
+      if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged || cutoutSelectionChanged) && !hasWaterfall && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         
         // Remove existing outlines AND debug tile helpers from mesh
         const toRemove = [];
         mesh.traverse((child) => {
-          if (child.isLineSegments || child.userData?.isDebugTileHelper) {
+          if (child.isLineSegments || child.userData?.isDebugTileHelper || child.userData?.isCutoutHighlight) {
             toRemove.push({ parent: child.parent, child: child });
           }
         });
@@ -5000,6 +5046,59 @@ function Configurator({ project, onBack }) {
             const isBacksplash = el.type === 'backsplash';
             const color = new THREE.Color(colorData.color);
             createTileHelper(mesh, layoutInfo, colorData, isBacksplash, color, { rendererRef, sceneRef, cameraRef });
+          }
+          
+          // Add cutout highlight if a cutout is selected
+          if (selectedCutoutId && el.cutouts) {
+            const selectedCutout = el.cutouts.find(c => c.id === selectedCutoutId);
+            if (selectedCutout) {
+              const isBacksplash = el.type === 'backsplash';
+              const pos = getCutout3DPosition(selectedCutout, el.thickness || 12, isBacksplash);
+              const dims = getCutoutDimensions(selectedCutout);
+              
+              let fillShape, outlineShape;
+              if (dims.type === 'circle') {
+                fillShape = new THREE.CircleGeometry(dims.radius, 32);
+                outlineShape = new THREE.RingGeometry(dims.radius - 0.003, dims.radius + 0.003, 32);
+              } else {
+                fillShape = new THREE.PlaneGeometry(dims.width, dims.height);
+                const hw = dims.width / 2, hh = dims.height / 2;
+                const points = [
+                  new THREE.Vector3(-hw, -hh, 0), new THREE.Vector3(hw, -hh, 0),
+                  new THREE.Vector3(hw, hh, 0), new THREE.Vector3(-hw, hh, 0),
+                  new THREE.Vector3(-hw, -hh, 0)
+                ];
+                outlineShape = new THREE.BufferGeometry().setFromPoints(points);
+              }
+              
+              const fillMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0x00c8ff, side: THREE.DoubleSide, transparent: true, opacity: 0.4, depthWrite: false
+              });
+              const fillMesh = new THREE.Mesh(fillShape, fillMaterial);
+              fillMesh.renderOrder = 998;
+              fillMesh.raycast = () => {};
+              fillMesh.userData.isCutoutHighlight = true;
+              
+              const outlineMaterial = dims.type === 'circle'
+                ? new THREE.MeshBasicMaterial({ color: 0x00c8ff, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
+                : new THREE.LineBasicMaterial({ color: 0x00c8ff, linewidth: 2 });
+              const outlineMesh = dims.type === 'circle'
+                ? new THREE.Mesh(outlineShape, outlineMaterial)
+                : new THREE.Line(outlineShape, outlineMaterial);
+              outlineMesh.renderOrder = 999;
+              outlineMesh.raycast = () => {};
+              outlineMesh.userData.isCutoutHighlight = true;
+              
+              if (!isBacksplash) {
+                fillMesh.rotation.x = -Math.PI / 2;
+                outlineMesh.rotation.x = -Math.PI / 2;
+              }
+              fillMesh.position.set(pos.x, pos.y, pos.z);
+              outlineMesh.position.set(pos.x, pos.y + 0.001, pos.z);
+              
+              mesh.add(fillMesh);
+              mesh.add(outlineMesh);
+            }
           }
         }
         
@@ -5127,6 +5226,62 @@ function Configurator({ project, onBack }) {
         outline.raycast = () => {}; // Disable raycast on outline
         mesh.add(outline);
       }
+      
+      // Highlight selected cutout
+      if (selectedCutoutId && el.cutouts) {
+        const selectedCutout = el.cutouts.find(c => c.id === selectedCutoutId);
+        if (selectedCutout) {
+          const isBacksplash = el.type === 'backsplash';
+          const pos = getCutout3DPosition(selectedCutout, el.thickness || 12, isBacksplash);
+          const dims = getCutoutDimensions(selectedCutout);
+          
+          let fillShape, outlineShape;
+          if (dims.type === 'circle') {
+            fillShape = new THREE.CircleGeometry(dims.radius, 32);
+            outlineShape = new THREE.RingGeometry(dims.radius - 0.003, dims.radius + 0.003, 32);
+          } else {
+            fillShape = new THREE.PlaneGeometry(dims.width, dims.height);
+            const hw = dims.width / 2, hh = dims.height / 2;
+            const points = [
+              new THREE.Vector3(-hw, -hh, 0), new THREE.Vector3(hw, -hh, 0),
+              new THREE.Vector3(hw, hh, 0), new THREE.Vector3(-hw, hh, 0),
+              new THREE.Vector3(-hw, -hh, 0)
+            ];
+            outlineShape = new THREE.BufferGeometry().setFromPoints(points);
+          }
+          
+          // Fill mesh
+          const fillMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x00c8ff, side: THREE.DoubleSide, transparent: true, opacity: 0.4, depthWrite: false
+          });
+          const fillMesh = new THREE.Mesh(fillShape, fillMaterial);
+          fillMesh.renderOrder = 998;
+          fillMesh.raycast = () => {};
+          fillMesh.userData.isCutoutHighlight = true;
+          
+          // Outline mesh
+          const outlineMaterial = dims.type === 'circle'
+            ? new THREE.MeshBasicMaterial({ color: 0x00c8ff, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
+            : new THREE.LineBasicMaterial({ color: 0x00c8ff, linewidth: 2 });
+          const outlineMesh = dims.type === 'circle'
+            ? new THREE.Mesh(outlineShape, outlineMaterial)
+            : new THREE.Line(outlineShape, outlineMaterial);
+          outlineMesh.renderOrder = 999;
+          outlineMesh.raycast = () => {};
+          outlineMesh.userData.isCutoutHighlight = true;
+          
+          // Position - rotate for slab orientation
+          if (!isBacksplash) {
+            fillMesh.rotation.x = -Math.PI / 2;
+            outlineMesh.rotation.x = -Math.PI / 2;
+          }
+          fillMesh.position.set(pos.x, pos.y, pos.z);
+          outlineMesh.position.set(pos.x, pos.y + 0.001, pos.z);
+          
+          mesh.add(fillMesh);
+          mesh.add(outlineMesh);
+        }
+      }
 
       // Waterfall edges (only for blat type)
       if ((el.waterfallLeft || el.waterfallRight) && el.type === 'island') {
@@ -5241,7 +5396,10 @@ function Configurator({ project, onBack }) {
     
     // Update debug texture ref for next comparison
     prevDebugTextureRef.current = debugTexture;
-  }, [elements, selectedIds, library, pieceLayout, groups, debugTexture, forceRenderKey]);
+    
+    // Update selected cutout ref for next comparison
+    prevSelectedCutoutIdRef.current = selectedCutoutId;
+  }, [elements, selectedIds, library, pieceLayout, groups, debugTexture, forceRenderKey, selectedCutoutId]);
 
   // Helper functions
   const getColorById = (id) => library.colors.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
@@ -5804,6 +5962,10 @@ function Configurator({ project, onBack }) {
               // Check if any piece exceeds tile dimensions
               const hasExceedingPiece = elementPieces.some(p => p.exceeds);
               
+              // Cutouts info
+              const cutouts = el.cutouts || [];
+              const hasCutouts = cutouts.length > 0;
+              
               return (
                 <div
                   key={el.id}
@@ -5837,6 +5999,21 @@ function Configurator({ project, onBack }) {
                         <div style={{ width: '12px', height: '12px', background: getColorById(el.material)?.color, borderRadius: '2px', border: '1px solid #333' }} />
                         <span style={{ fontSize: '10px', color: '#888' }}>{getColorById(el.material)?.name}</span>
                       </div>
+                      {hasCutouts && (
+                        <div style={{ fontSize: '9px', color: '#888', marginTop: '6px' }}>
+                          <div style={{ marginBottom: '2px' }}>✂️ Goluri:</div>
+                          {cutouts.map((c, i) => {
+                            const dim = c.type === 'circle' 
+                              ? `Ø${(c.radius * 2).toFixed(1)}cm`
+                              : `${c.width}×${c.height}cm`;
+                            return (
+                              <div key={c.id} style={{ paddingLeft: '12px', color: '#666' }}>
+                                <span style={{ color: '#c9a962' }}>{index + 1}.{String(i + 1).padStart(2, '0')}</span> {c.name} <span style={{ color: '#555' }}>({dim})</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                     <button onClick={(e) => { e.stopPropagation(); removeElement(el.id); }} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}>×</button>
                   </div>
@@ -6389,27 +6566,80 @@ function Configurator({ project, onBack }) {
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {(selected.cutouts || []).map((cutout, cutoutIndex) => {
+                    {/* Reverse order to show newest first, but keep original indices for updates */}
+                    {[...(selected.cutouts || [])].map((cutout, idx) => ({ cutout, originalIndex: idx })).reverse().map(({ cutout, originalIndex }) => {
+                      const cutoutIndex = originalIndex; // Use original index for updates
                       const pieceDepth = selected.type === 'backsplash' ? selected.height : selected.depth;
                       const userInput = cutoutCenterToUserInput(cutout, selected.length, pieceDepth);
                       const validation = validateCutout(cutout, selected.length, pieceDepth, selected.cutouts || []);
                       const preset = CUTOUT_PRESETS[cutout.preset];
                       const icon = preset?.icon || (cutout.type === 'circle' ? '⭕' : '⬜');
                       
+                      // Get element index for numbering (e.g., 1.01, 2.03)
+                      const elementIndex = elements.findIndex(e => e.id === selected.id) + 1;
+                      const cutoutNumber = `${elementIndex}.${String(originalIndex + 1).padStart(2, '0')}`;
+                      const isCutoutSelected = selectedCutoutId === cutout.id;
+                      const isEditingName = editingCutoutNameId === cutout.id;
+                      
                       return (
-                        <div key={cutout.id} style={{
-                          padding: '10px',
-                          background: '#1a1a1a',
-                          borderRadius: '4px',
-                          border: `1px solid ${validation.errors.length > 0 ? '#c96262' : (validation.warnings.length > 0 ? '#c9a962' : '#2a2a2a')}`
-                        }}>
+                        <div 
+                          key={cutout.id} 
+                          onClick={() => setSelectedCutoutId(isCutoutSelected ? null : cutout.id)}
+                          style={{
+                            padding: '10px',
+                            background: isCutoutSelected ? 'rgba(0, 200, 255, 0.1)' : '#1a1a1a',
+                            borderRadius: '4px',
+                            border: isCutoutSelected 
+                              ? '2px solid #00c8ff' 
+                              : `1px solid ${validation.errors.length > 0 ? '#c96262' : (validation.warnings.length > 0 ? '#c9a962' : '#2a2a2a')}`,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
                           {/* Header */}
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                            <div style={{ fontSize: '11px', fontWeight: 500 }}>
-                              {icon} {cutout.name}
+                            <div style={{ fontSize: '11px', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '6px', flex: 1 }}>
+                              <span style={{ color: '#c9a962' }}>{cutoutNumber}</span>
+                              <span>{icon}</span>
+                              {isEditingName ? (
+                                <input
+                                  type="text"
+                                  value={cutout.name}
+                                  onChange={(e) => {
+                                    const newCutouts = [...(selected.cutouts || [])];
+                                    newCutouts[cutoutIndex] = { ...cutout, name: e.target.value };
+                                    updateElement(selected.id, { cutouts: newCutouts });
+                                  }}
+                                  onBlur={() => setEditingCutoutNameId(null)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') setEditingCutoutNameId(null); }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  autoFocus
+                                  style={{
+                                    background: '#222',
+                                    border: '1px solid #c9a962',
+                                    borderRadius: '3px',
+                                    color: '#ddd',
+                                    fontSize: '11px',
+                                    fontWeight: 500,
+                                    padding: '2px 6px',
+                                    flex: 1,
+                                    minWidth: 0,
+                                  }}
+                                />
+                              ) : (
+                                <>
+                                  <span style={{ color: '#ddd', flex: 1 }}>{cutout.name}</span>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setEditingCutoutNameId(cutout.id); }}
+                                    style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '11px', padding: '0 4px' }}
+                                    title="Redenumește"
+                                  >✏️</button>
+                                </>
+                              )}
                             </div>
                             <button
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 if (window.confirm(`Ștergi decupajul "${cutout.name}"?`)) {
                                   const newCutouts = (selected.cutouts || []).filter(c => c.id !== cutout.id);
                                   updateElement(selected.id, { cutouts: newCutouts });
@@ -6432,19 +6662,18 @@ function Configurator({ project, onBack }) {
                                 }}
                                 min={1}
                                 step={0.5}
-                                style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                style={{ ...inputStyle, padding: '6px', fontSize: '11px', width: '80px' }}
                               />
                             </div>
                           ) : (
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px' }}>
-                              <div>
-                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Lățime (cm)</label>
+                            <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', alignItems: 'flex-end' }}>
+                              <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: '8px', color: '#666', display: 'block', marginBottom: '2px' }}>Lățime</label>
                                 <NumericInput
                                   value={cutout.width || 0}
                                   onChange={v => {
                                     const newCutouts = [...(selected.cutouts || [])];
                                     newCutouts[cutoutIndex] = { ...cutout, width: v };
-                                    // Recalculate center to keep corner position stable
                                     const oldUserInput = cutoutCenterToUserInput(cutout, selected.length, pieceDepth);
                                     const newCenter = cutoutUserInputToCenter(oldUserInput.cotaStanga, oldUserInput.cotaFata, { ...cutout, width: v }, selected.length, pieceDepth);
                                     newCutouts[cutoutIndex].center = newCenter;
@@ -6452,17 +6681,16 @@ function Configurator({ project, onBack }) {
                                   }}
                                   min={1}
                                   step={1}
-                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                  style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                                 />
                               </div>
-                              <div>
-                                <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Lungime (cm)</label>
+                              <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: '8px', color: '#666', display: 'block', marginBottom: '2px' }}>Lungime</label>
                                 <NumericInput
                                   value={cutout.height || 0}
                                   onChange={v => {
                                     const newCutouts = [...(selected.cutouts || [])];
                                     newCutouts[cutoutIndex] = { ...cutout, height: v };
-                                    // Recalculate center to keep corner position stable
                                     const oldUserInput = cutoutCenterToUserInput(cutout, selected.length, pieceDepth);
                                     const newCenter = cutoutUserInputToCenter(oldUserInput.cotaStanga, oldUserInput.cotaFata, { ...cutout, height: v }, selected.length, pieceDepth);
                                     newCutouts[cutoutIndex].center = newCenter;
@@ -6470,12 +6698,12 @@ function Configurator({ project, onBack }) {
                                   }}
                                   min={1}
                                   step={1}
-                                  style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                  style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                                 />
                               </div>
                               {cutout.type === 'rectangle' && (
-                                <div style={{ gridColumn: '1 / -1' }}>
-                                  <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Colțuri rotunjite (cm)</label>
+                                <div style={{ flex: 1 }}>
+                                  <label style={{ fontSize: '8px', color: '#666', display: 'block', marginBottom: '2px' }}>Rază colț</label>
                                   <NumericInput
                                     value={cutout.cornerRadius || 0}
                                     onChange={v => {
@@ -6486,7 +6714,7 @@ function Configurator({ project, onBack }) {
                                     min={0}
                                     max={Math.min((cutout.width || 0) / 2, (cutout.height || 0) / 2)}
                                     step={0.5}
-                                    style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                                    style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                                   />
                                 </div>
                               )}
@@ -6495,9 +6723,6 @@ function Configurator({ project, onBack }) {
 
                           {/* Position - User friendly (from left edge) */}
                           <div style={{ marginBottom: '8px', paddingTop: '8px', borderTop: '1px solid #2a2a2a' }}>
-                            <label style={{ fontSize: '9px', color: '#888', display: 'block', marginBottom: '4px' }}>
-                              Poziție {cutout.type === 'circle' ? '(centru)' : '(colț stânga-față)'}
-                            </label>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
                               <div>
                                 <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>De la stânga (cm)</label>
@@ -6695,6 +6920,8 @@ function Configurator({ project, onBack }) {
         manualLayoutPositions={manualLayoutPositions}
         setManualLayoutPositions={setManualLayoutPositions}
         pushManualLayoutToHistory={pushManualLayoutToHistory}
+        selectedCutoutId={selectedCutoutId}
+        setSelectedCutoutId={setSelectedCutoutId}
       />
     </div>
   );
@@ -6704,7 +6931,7 @@ function Configurator({ project, onBack }) {
 // SLAB CALCULATOR FOOTER COMPONENT
 // ============================================
 
-function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory }) {
+function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory, selectedCutoutId, setSelectedCutoutId }) {
   const [sendingQuote, setSendingQuote] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState(null); // 'success' | 'error' | null
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -7220,6 +7447,145 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
   const backsplashStandardLength = backsplashStandard.reduce((sum, p) => sum + p.pieceW, 0) / 100;
   const backsplashAtypicalLength = backsplashAtypical.reduce((sum, p) => sum + p.pieceW, 0) / 100;
   
+  // Calculate cutting lengths per tile
+  // External cuts: optimized to not count shared edges twice
+  // Internal cuts: perimeters of all cutouts
+  const cuttingStats = useMemo(() => {
+    let totalExternalCuts = 0;
+    let totalInternalCuts = 0;
+    
+    tiles.forEach((tile, tileIdx) => {
+      const tilePieces = pieces.filter(p => p.tileIndex === tileIdx);
+      if (tilePieces.length === 0) return;
+      
+      // Collect all edges as line segments
+      // Each edge: { x1, y1, x2, y2, horizontal: bool }
+      const edges = [];
+      
+      tilePieces.forEach(p => {
+        const x1 = p.x, y1 = p.y;
+        const x2 = p.x + p.pieceW, y2 = p.y + p.pieceH;
+        
+        // Four edges per piece
+        edges.push({ x1, y1, x2: x2, y2: y1, horizontal: true });  // top
+        edges.push({ x1, y1: y2, x2: x2, y2: y2, horizontal: true });  // bottom
+        edges.push({ x1, y1, x2: x1, y2: y2, horizontal: false }); // left
+        edges.push({ x1: x2, y1, x2: x2, y2: y2, horizontal: false }); // right
+      });
+      
+      // Find unique cuts by merging overlapping/adjacent segments on same line
+      // and removing segments that appear twice (shared edges)
+      
+      // Group edges by their axis position
+      const horizontalLines = {}; // y -> array of {x1, x2}
+      const verticalLines = {};   // x -> array of {y1, y2}
+      
+      edges.forEach(e => {
+        if (e.horizontal) {
+          const y = Math.round(e.y1 * 100) / 100; // round to avoid float issues
+          if (!horizontalLines[y]) horizontalLines[y] = [];
+          horizontalLines[y].push({ x1: Math.min(e.x1, e.x2), x2: Math.max(e.x1, e.x2) });
+        } else {
+          const x = Math.round(e.x1 * 100) / 100;
+          if (!verticalLines[x]) verticalLines[x] = [];
+          verticalLines[x].push({ y1: Math.min(e.y1, e.y2), y2: Math.max(e.y1, e.y2) });
+        }
+      });
+      
+      // For each line, merge overlapping segments and count unique length
+      const mergeSegments = (segments) => {
+        if (segments.length === 0) return 0;
+        
+        // Sort by start position
+        const sorted = [...segments].sort((a, b) => (a.x1 ?? a.y1) - (b.x1 ?? b.y1));
+        
+        // Count occurrences of each segment to detect shared edges
+        const segmentCounts = {};
+        sorted.forEach(s => {
+          const key = `${s.x1 ?? s.y1}-${s.x2 ?? s.y2}`;
+          segmentCounts[key] = (segmentCounts[key] || 0) + 1;
+        });
+        
+        // Filter out segments that appear twice (shared edges - no cut needed)
+        const uniqueSegments = sorted.filter(s => {
+          const key = `${s.x1 ?? s.y1}-${s.x2 ?? s.y2}`;
+          return segmentCounts[key] === 1;
+        });
+        
+        if (uniqueSegments.length === 0) return 0;
+        
+        // Merge overlapping/adjacent segments
+        const merged = [];
+        let current = { ...uniqueSegments[0] };
+        
+        for (let i = 1; i < uniqueSegments.length; i++) {
+          const next = uniqueSegments[i];
+          const curEnd = current.x2 ?? current.y2;
+          const nextStart = next.x1 ?? next.y1;
+          
+          if (nextStart <= curEnd) {
+            // Overlapping or adjacent - extend current
+            current.x2 = current.x2 !== undefined ? Math.max(current.x2, next.x2) : undefined;
+            current.y2 = current.y2 !== undefined ? Math.max(current.y2, next.y2) : undefined;
+          } else {
+            merged.push(current);
+            current = { ...next };
+          }
+        }
+        merged.push(current);
+        
+        // Calculate total length
+        return merged.reduce((sum, s) => {
+          const len = (s.x2 ?? s.y2) - (s.x1 ?? s.y1);
+          return sum + len;
+        }, 0);
+      };
+      
+      // Sum up all unique horizontal cuts
+      Object.values(horizontalLines).forEach(segments => {
+        const segs = segments.map(s => ({ x1: s.x1, x2: s.x2 }));
+        totalExternalCuts += mergeSegments(segs);
+      });
+      
+      // Sum up all unique vertical cuts
+      Object.values(verticalLines).forEach(segments => {
+        const segs = segments.map(s => ({ y1: s.y1, y2: s.y2 }));
+        totalExternalCuts += mergeSegments(segs);
+      });
+    });
+    
+    // Calculate internal cuts (cutout perimeters) and cutout stats
+    let cutoutCount = 0;
+    let cutoutArea = 0;
+    
+    elements.forEach(el => {
+      if (!el.cutouts || el.cutouts.length === 0) return;
+      
+      el.cutouts.forEach(cutout => {
+        cutoutCount++;
+        if (cutout.type === 'circle') {
+          // Circle perimeter = 2 * PI * r, area = PI * r^2
+          const r = cutout.radius || 0;
+          totalInternalCuts += 2 * Math.PI * r;
+          cutoutArea += Math.PI * r * r;
+        } else {
+          // Rectangle perimeter = 2 * (w + h), area = w * h
+          const w = cutout.width || 0;
+          const h = cutout.height || 0;
+          totalInternalCuts += 2 * (w + h);
+          cutoutArea += w * h;
+        }
+      });
+    });
+    
+    return {
+      external: totalExternalCuts / 100, // convert cm to m
+      internal: totalInternalCuts / 100, // convert cm to m
+      cutoutCount,
+      cutoutArea: cutoutArea / 10000 // convert cm² to m²
+    };
+  }, [tiles, pieces, elements]);
+  
   // Group tiles by material type for display
   const tilesByMaterial = {};
   tiles.forEach((tile, i) => {
@@ -7229,6 +7595,35 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
     }
     tilesByMaterial[materialType].push({ ...tile, originalIndex: i });
   });
+  
+  // Group tiles by color and format for summary, including efficiency
+  const tilesGroupedByColor = {};
+  tiles.forEach((tile, idx) => {
+    const color = getColorById(tile.colorId);
+    const format = tile.format;
+    const key = `${color?.name || 'N/A'}|${format ? `${format.length}×${format.width}` : '-'}`;
+    
+    // Calculate efficiency for this tile
+    const tilePieces = pieces.filter(p => p.tileIndex === idx);
+    const tileArea = format ? format.length * format.width : 320 * 160;
+    const usedArea = tilePieces.reduce((sum, p) => sum + (p.pieceW * p.pieceH), 0);
+    const efficiency = tileArea > 0 ? Math.round((usedArea / tileArea) * 100) : 0;
+    
+    if (!tilesGroupedByColor[key]) {
+      tilesGroupedByColor[key] = { colorName: color?.name || 'N/A', format: format ? `${format.length}×${format.width}` : '-', count: 0, totalEfficiency: 0 };
+    }
+    tilesGroupedByColor[key].count++;
+    tilesGroupedByColor[key].totalEfficiency += efficiency;
+  });
+  const tilesGroupedList = Object.values(tilesGroupedByColor).map(g => ({
+    ...g,
+    avgEfficiency: g.count > 0 ? Math.round(g.totalEfficiency / g.count) : 0
+  }));
+  
+  // Calculate overall average efficiency
+  const overallAvgEfficiency = tiles.length > 0 
+    ? Math.round(tilesGroupedList.reduce((sum, g) => sum + g.totalEfficiency, 0) / tiles.length)
+    : 0;
   
   // Load html2canvas dynamically and capture tiles area only
   const captureFooter = async () => {
@@ -7417,53 +7812,91 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
         position: 'relative',
         zIndex: 100,
     }}>
-      {/* Combined Summary Card - Compact */}
+      {/* Combined Summary Card - Restructured */}
       <div style={{ 
         background: exceedingPieces.length > 0 ? 'rgba(201,98,98,0.1)' : 'rgba(201,169,98,0.1)', 
         border: exceedingPieces.length > 0 ? '1px solid #c96262' : '1px solid #c9a962', 
         padding: '8px 10px',
-        minWidth: '140px',
+        minWidth: '160px',
         flexShrink: 0,
-        fontSize: '10px',
+        fontSize: '9px',
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px', gap: '8px' }}>
-          <span style={{ color: '#888' }}>Piese</span><span>{pieces.length}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px', gap: '8px' }}>
-          <span style={{ color: '#888' }}>Suprafață</span><span>{parseFloat(totalArea.toFixed(2))} m²</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-          <span style={{ color: '#888' }}>Plăci</span>
-          <span style={{ color: exceedingPieces.length > 0 ? '#c96262' : '#c9a962', fontWeight: 600 }}>{count}</span>
+        {/* PLĂCI Section */}
+        <div style={{ marginBottom: '6px' }}>
+          <div style={{ color: '#c9a962', fontWeight: 600, marginBottom: '3px' }}>
+            📦 Plăci: {count} · {overallAvgEfficiency}%
+          </div>
+          {tilesGroupedList.map((g, i) => (
+            <div key={i} style={{ color: '#888', paddingLeft: '8px', display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+              <span>{g.count}× {g.colorName} {g.format}</span>
+              <span style={{ 
+                color: g.avgEfficiency >= 70 ? '#4a9' : g.avgEfficiency >= 50 ? '#c9a962' : '#c96262',
+                fontWeight: 500
+              }}>{g.avgEfficiency}%</span>
+            </div>
+          ))}
         </div>
 
-        {/* Blaturi - inline */}
-        {slabPieces.length > 0 && (
-          <div style={{ borderTop: '1px solid rgba(201,169,98,0.3)', marginTop: '4px', paddingTop: '4px' }}>
-            <span style={{ color: '#c9a962', fontWeight: 600 }}>Blaturi: </span>
-            {slabStandardLength > 0 && <span style={{ color: '#888' }}>{parseFloat(slabStandardLength.toFixed(2))}ml std</span>}
-            {slabStandardLength > 0 && slabAtypicalLength > 0 && <span style={{ color: '#555' }}> · </span>}
-            {slabAtypicalLength > 0 && <span style={{ color: '#e8a87c' }}>{parseFloat(slabAtypicalLength.toFixed(2))}ml atipic</span>}
+        {/* PIESE Section */}
+        <div style={{ borderTop: '1px solid rgba(201,169,98,0.3)', paddingTop: '6px', marginBottom: '6px' }}>
+          <div style={{ color: '#c9a962', fontWeight: 600, marginBottom: '3px' }}>
+            🧩 Piese: {pieces.length}
+          </div>
+          <div style={{ color: '#888', paddingLeft: '8px' }}>
+            {parseFloat(totalArea.toFixed(2))}m² · {cuttingStats.external.toFixed(2)}ml debitare
+          </div>
+        </div>
+
+        {/* DECUPAJE Section */}
+        {cuttingStats.cutoutCount > 0 && (
+          <div style={{ borderTop: '1px solid rgba(201,169,98,0.3)', paddingTop: '6px', marginBottom: '6px' }}>
+            <div style={{ color: '#c9a962', fontWeight: 600, marginBottom: '3px' }}>
+              ✂️ Decupaje: {cuttingStats.cutoutCount}
+            </div>
+            <div style={{ color: '#888', paddingLeft: '8px' }}>
+              {cuttingStats.cutoutArea.toFixed(2)}m² · {cuttingStats.internal.toFixed(2)}ml
+            </div>
           </div>
         )}
 
-        {/* Contrablaturi - inline */}
-        {backsplashPieces.length > 0 && (
-          <div style={{ marginTop: '2px' }}>
-            <span style={{ color: '#6495ed', fontWeight: 600 }}>C.blaturi: </span>
-            {backsplashStandardLength > 0 && <span style={{ color: '#888' }}>{parseFloat(backsplashStandardLength.toFixed(2))}ml std</span>}
-            {backsplashStandardLength > 0 && backsplashAtypicalLength > 0 && <span style={{ color: '#555' }}> · </span>}
-            {backsplashAtypicalLength > 0 && <span style={{ color: '#e8a87c' }}>{parseFloat(backsplashAtypicalLength.toFixed(2))}ml atipic</span>}
+        {/* TIPURI PIESE Section */}
+        <div style={{ borderTop: '1px solid rgba(201,169,98,0.3)', paddingTop: '6px' }}>
+          <div style={{ color: '#c9a962', fontWeight: 600, marginBottom: '3px' }}>
+            📏 Metraj liniar:
           </div>
-        )}
+          {/* Blaturi standard */}
+          {slabStandardLength > 0 && (
+            <div style={{ color: '#888', paddingLeft: '8px' }}>
+              {slabStandard.length}× blat std · {parseFloat(slabStandardLength.toFixed(2))}ml
+            </div>
+          )}
+          {/* Blaturi atipice */}
+          {slabAtypicalLength > 0 && (
+            <div style={{ color: '#e8a87c', paddingLeft: '8px' }}>
+              {slabAtypical.length}× blat atipic · {parseFloat(slabAtypicalLength.toFixed(2))}ml
+            </div>
+          )}
+          {/* Contrablaturi standard */}
+          {backsplashStandardLength > 0 && (
+            <div style={{ color: '#888', paddingLeft: '8px' }}>
+              {backsplashStandard.length}× c.blat std · {parseFloat(backsplashStandardLength.toFixed(2))}ml
+            </div>
+          )}
+          {/* Contrablaturi atipice */}
+          {backsplashAtypicalLength > 0 && (
+            <div style={{ color: '#e8a87c', paddingLeft: '8px' }}>
+              {backsplashAtypical.length}× c.blat atipic · {parseFloat(backsplashAtypicalLength.toFixed(2))}ml
+            </div>
+          )}
+        </div>
 
+        {/* Warning for exceeding pieces */}
         {exceedingPieces.length > 0 && (
           <div style={{ 
-            marginTop: '4px', 
+            marginTop: '6px', 
             padding: '3px 6px', 
             background: 'rgba(201,98,98,0.2)', 
             borderRadius: '3px',
-            fontSize: '9px',
             color: '#c96262',
             textAlign: 'center'
           }}>
@@ -7711,15 +8144,8 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                 backgroundColor: overlayColor,
                                 border: borderStyle,
                                 boxShadow: boxShadowColor !== 'none' ? `0 0 8px ${boxShadowColor}` : 'none',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: '10px',
-                                color: textColor,
-                                fontWeight: (shouldHighlight || exceeds) ? 600 : 500,
-                                textShadow: '0 0 2px rgba(0,0,0,0.8)',
                               }}>
-                                {/* Render cutouts as dark overlays */}
+                                {/* Render cutouts as dark overlays - BEHIND text */}
                                 {pieceElement?.cutouts?.map((cutout, cutIdx) => {
                                   // Get piece dimensions in cm
                                   const pieceLengthCm = pieceElement.length;
@@ -7736,14 +8162,16 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                   if (cutout.type === 'circle') {
                                     const diameterCm = (cutout.radius || 0) * 2;
                                     if (isRotatedOnTile) {
-                                      // Rotated 90° CW: x->y, y->width-x
-                                      cutLeftPx = userInput.cotaFata * uniformScale - (cutout.radius || 0) * uniformScale;
-                                      cutTopPx = (pieceLengthCm - userInput.cotaStanga) * uniformScale - (cutout.radius || 0) * uniformScale;
+                                      // Rotated 90° CW: cotaStanga->X (from right), cotaFata->Y (from bottom)
+                                      // When rotated, pieceW=depth, pieceH=length on tile
+                                      cutLeftPx = (pieceDepthCm - userInput.cotaFata - (cutout.radius || 0)) * uniformScale;
+                                      cutTopPx = (pieceLengthCm - userInput.cotaStanga - (cutout.radius || 0)) * uniformScale;
                                       cutWPx = diameterCm * uniformScale;
                                       cutHPx = diameterCm * uniformScale;
                                     } else {
                                       cutLeftPx = (userInput.cotaStanga - (cutout.radius || 0)) * uniformScale;
-                                      cutTopPx = (userInput.cotaFata - (cutout.radius || 0)) * uniformScale;
+                                      // Invert Y: cotaFata is from front edge, but in footer top=0 is back edge
+                                      cutTopPx = (pieceDepthCm - userInput.cotaFata - (cutout.radius || 0)) * uniformScale;
                                       cutWPx = diameterCm * uniformScale;
                                       cutHPx = diameterCm * uniformScale;
                                     }
@@ -7751,6 +8179,12 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                     return (
                                       <div
                                         key={cutIdx}
+                                        onClick={(e) => {
+                                          if (shouldHighlight) {
+                                            e.stopPropagation();
+                                            setSelectedCutoutId(selectedCutoutId === cutout.id ? null : cutout.id);
+                                          }
+                                        }}
                                         style={{
                                           position: 'absolute',
                                           left: cutLeftPx,
@@ -7758,9 +8192,14 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                           width: cutWPx,
                                           height: cutHPx,
                                           borderRadius: '50%',
-                                          background: 'rgba(30, 30, 30, 0.85)',
-                                          border: '1px solid #444',
-                                          pointerEvents: 'none',
+                                          background: selectedCutoutId === cutout.id ? 'rgba(0, 200, 255, 0.3)' : 'rgba(30, 30, 30, 0.85)',
+                                          border: selectedCutoutId === cutout.id 
+                                            ? '3px solid #00c8ff' 
+                                            : (p.isManual ? '2px dashed #c9a962' : '2px solid #c9a962'),
+                                          pointerEvents: shouldHighlight ? 'auto' : 'none',
+                                          cursor: shouldHighlight ? 'pointer' : 'default',
+                                          boxSizing: 'border-box',
+                                          boxShadow: selectedCutoutId === cutout.id ? '0 0 12px rgba(0, 200, 255, 0.6)' : 'none',
                                         }}
                                         title={cutout.name}
                                       />
@@ -7772,14 +8211,16 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                     const cornerR = (cutout.cornerRadius || 0) * uniformScale;
                                     
                                     if (isRotatedOnTile) {
-                                      // Rotated 90° CW
-                                      cutLeftPx = userInput.cotaFata * uniformScale;
+                                      // Rotated 90° CW: cotaStanga->X (from right), cotaFata->Y (from bottom)
+                                      // When rotated, pieceW=depth, pieceH=length on tile, and W/H swap
+                                      cutLeftPx = (pieceDepthCm - userInput.cotaFata - cutH) * uniformScale;
                                       cutTopPx = (pieceLengthCm - userInput.cotaStanga - cutW) * uniformScale;
                                       cutWPx = cutH * uniformScale;
                                       cutHPx = cutW * uniformScale;
                                     } else {
                                       cutLeftPx = userInput.cotaStanga * uniformScale;
-                                      cutTopPx = userInput.cotaFata * uniformScale;
+                                      // Invert Y: cotaFata is from front edge, but in footer top=0 is back edge
+                                      cutTopPx = (pieceDepthCm - userInput.cotaFata - cutH) * uniformScale;
                                       cutWPx = cutW * uniformScale;
                                       cutHPx = cutH * uniformScale;
                                     }
@@ -7787,6 +8228,12 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                     return (
                                       <div
                                         key={cutIdx}
+                                        onClick={(e) => {
+                                          if (shouldHighlight) {
+                                            e.stopPropagation();
+                                            setSelectedCutoutId(selectedCutoutId === cutout.id ? null : cutout.id);
+                                          }
+                                        }}
                                         style={{
                                           position: 'absolute',
                                           left: cutLeftPx,
@@ -7794,9 +8241,14 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                           width: cutWPx,
                                           height: cutHPx,
                                           borderRadius: cornerR,
-                                          background: 'rgba(30, 30, 30, 0.85)',
-                                          border: '1px solid #444',
-                                          pointerEvents: 'none',
+                                          background: selectedCutoutId === cutout.id ? 'rgba(0, 200, 255, 0.3)' : 'rgba(30, 30, 30, 0.85)',
+                                          border: selectedCutoutId === cutout.id 
+                                            ? '3px solid #00c8ff' 
+                                            : (p.isManual ? '2px dashed #c9a962' : '2px solid #c9a962'),
+                                          pointerEvents: shouldHighlight ? 'auto' : 'none',
+                                          cursor: shouldHighlight ? 'pointer' : 'default',
+                                          boxSizing: 'border-box',
+                                          boxShadow: selectedCutoutId === cutout.id ? '0 0 12px rgba(0, 200, 255, 0.6)' : 'none',
                                         }}
                                         title={cutout.name}
                                       />
@@ -7837,8 +8289,22 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
                                     borderRadius: '0 2px 2px 0',
                                   }} />
                                 )}
-                                
-                                {/* Label */}
+                              </div>
+                              
+                              {/* Label - ABOVE cutouts */}
+                              <div style={{
+                                position: 'absolute',
+                                inset: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '10px',
+                                color: textColor,
+                                fontWeight: (shouldHighlight || exceeds) ? 600 : 500,
+                                textShadow: '0 0 2px rgba(0,0,0,0.8)',
+                                pointerEvents: 'none',
+                                zIndex: 2,
+                              }}>
                                 {pieceWpx > 40 && pieceHpx > 15 ? (
                                   <span>
                                     {exceeds && '⚠️ '}
