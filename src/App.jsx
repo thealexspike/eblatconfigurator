@@ -409,6 +409,56 @@ function getCutoutDimensions(cutout) {
   }
 }
 
+// Global texture cache to avoid reloading and track loading state
+const textureCache = new Map();
+const textureLoadCallbacks = new Map(); // Callbacks to call when texture loads
+
+function loadTextureWithCache(url, onLoad, rendererRef) {
+  // If already cached and loaded, call callback immediately
+  if (textureCache.has(url)) {
+    const cached = textureCache.get(url);
+    if (cached.loaded) {
+      onLoad(cached.texture);
+      return;
+    }
+    // Still loading - add to callbacks
+    if (!textureLoadCallbacks.has(url)) {
+      textureLoadCallbacks.set(url, []);
+    }
+    textureLoadCallbacks.get(url).push(onLoad);
+    return;
+  }
+  
+  // Start loading
+  textureCache.set(url, { loaded: false, texture: null });
+  textureLoadCallbacks.set(url, [onLoad]);
+  
+  const loader = new THREE.TextureLoader();
+  loader.load(url, (texture) => {
+    // Configure texture
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = true;
+    if (rendererRef?.current) {
+      texture.anisotropy = rendererRef.current.capabilities?.getMaxAnisotropy() || 4;
+    }
+    
+    // Cache it
+    textureCache.set(url, { loaded: true, texture });
+    
+    // Call all waiting callbacks
+    const callbacks = textureLoadCallbacks.get(url) || [];
+    callbacks.forEach(cb => cb(texture));
+    textureLoadCallbacks.delete(url);
+  }, undefined, (error) => {
+    console.error('Error loading texture:', url, error);
+    textureCache.delete(url);
+    textureLoadCallbacks.delete(url);
+  });
+}
+
 /**
  * Creates a triplanar shader material for proper texture mapping
  * Uses LOCAL coordinates so texture stays fixed when piece is rotated/moved
@@ -802,13 +852,8 @@ function createTileHelper(parentMesh, layoutInfo, colorData, isBacksplash, color
   // Add as child of parent mesh
   parentMesh.add(tileMesh);
   
-  // Load texture and apply triplanar shader
-  const textureLoader = new THREE.TextureLoader();
-  textureLoader.load(colorData.texture, (texture) => {
-    texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
-    texture.anisotropy = refs.rendererRef?.current?.capabilities?.getMaxAnisotropy() || 4;
-    
+  // Load texture using cache and apply triplanar shader
+  loadTextureWithCache(colorData.texture, (texture) => {
     const tileTriplanarMat = createTriplanarMaterial(texture, fullTileLayoutInfo, isBacksplash, color, false, 0.5);
     
     tileMesh.material.dispose();
@@ -818,7 +863,7 @@ function createTileHelper(parentMesh, layoutInfo, colorData, isBacksplash, color
     if (refs.rendererRef?.current && refs.sceneRef?.current && refs.cameraRef?.current) {
       refs.rendererRef.current.render(refs.sceneRef.current, refs.cameraRef.current);
     }
-  });
+  }, refs.rendererRef);
   
   return tileMesh;
 }
@@ -3461,13 +3506,23 @@ function Configurator({ project, onBack }) {
   const [selectedCutoutId, setSelectedCutoutId] = useState(null); // Selected cutout for highlighting
   const [editingCutoutNameId, setEditingCutoutNameId] = useState(null); // Cutout being renamed
   
-  // Force re-render of all textures on initial load
+  // Track loaded textures to force re-render only when NEW textures finish loading
+  const loadedTexturesCountRef = useRef(0);
+  
+  // Check periodically if new textures have loaded
   useEffect(() => {
-    // Small delay to ensure library is loaded
-    const timer = setTimeout(() => {
-      setForceRenderKey(prev => prev + 1);
-    }, 100);
-    return () => clearTimeout(timer);
+    const checkInterval = setInterval(() => {
+      // Count how many textures are fully loaded
+      const loadedCount = Array.from(textureCache.values()).filter(t => t.loaded).length;
+      
+      // If new textures finished loading, force re-render
+      if (loadedCount > loadedTexturesCountRef.current) {
+        loadedTexturesCountRef.current = loadedCount;
+        setForceRenderKey(prev => prev + 1);
+      }
+    }, 300);
+    
+    return () => clearInterval(checkInterval);
   }, []);
   
   // Track previous element dimensions to detect changes and invalidate manual positions
@@ -5093,15 +5148,11 @@ function Configurator({ project, onBack }) {
           } else {
             // Deselected: restore texture
             if (colorData.texture && layoutInfo) {
-              const textureLoader = new THREE.TextureLoader();
-              textureLoader.load(colorData.texture, (texture) => {
-                texture.wrapS = THREE.ClampToEdgeWrapping;
-                texture.wrapT = THREE.ClampToEdgeWrapping;
-                texture.anisotropy = rendererRef.current?.capabilities?.getMaxAnisotropy() || 4;
+              loadTextureWithCache(colorData.texture, (texture) => {
                 const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color, false);
                 mesh.material.dispose();
                 mesh.material = triplanarMat;
-              });
+              }, rendererRef);
             } else {
               mesh.material.dispose();
               mesh.material = new THREE.MeshLambertMaterial({ color: color });
@@ -5247,22 +5298,23 @@ function Configurator({ project, onBack }) {
       let material;
       
       if (hasTexture) {
-        // Load texture and create triplanar shader material
-        const textureLoader = new THREE.TextureLoader();
+        // Load texture using cache and create triplanar shader material
         const isBacksplash = el.type === 'backsplash';
         
         // Create placeholder material first
         material = new THREE.MeshLambertMaterial({ color: color });
-        
-        textureLoader.load(colorData.texture, (texture) => {
-          // Configure texture
-          texture.wrapS = THREE.ClampToEdgeWrapping;
-          texture.wrapT = THREE.ClampToEdgeWrapping;
-          texture.anisotropy = rendererRef.current?.capabilities?.getMaxAnisotropy() || 4;
-          texture.minFilter = THREE.LinearMipmapLinearFilter;
-          texture.magFilter = THREE.LinearFilter;
-          texture.generateMipmaps = true;
-          
+      } else {
+        material = new THREE.MeshLambertMaterial({ color: color });
+      }
+      
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+
+      // Now load texture asynchronously and update material when ready
+      if (hasTexture) {
+        const isBacksplash = el.type === 'backsplash';
+        loadTextureWithCache(colorData.texture, (texture) => {
           // Create triplanar material - uses local coords so no need to update position
           // Only enable debug mode for SELECTED elements
           const isDebugActive = debugTexture && shouldHighlight;
@@ -5276,20 +5328,16 @@ function Configurator({ project, onBack }) {
               opacity: 0,
               depthWrite: false
             });
+            mesh.material.dispose();
             mesh.material = transparentMat;
           } else {
             const triplanarMat = createTriplanarMaterial(texture, layoutInfo, isBacksplash, color, false);
+            mesh.material.dispose();
             mesh.material = triplanarMat;
           }
           mesh.material.needsUpdate = true;
-        });
-      } else {
-        material = new THREE.MeshLambertMaterial({ color: color });
+        }, rendererRef);
       }
-      
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
 
       // Position - use world position for grouped elements
       const worldPos = getWorldPosition(el);
@@ -5403,32 +5451,28 @@ function Configurator({ project, onBack }) {
             // Use triplanar shader for consistent rendering with slab
             // Waterfall layout needs adjustment - it's laid out horizontally in packer
             // but rendered vertically in 3D with main face on ±X axis
-            const textureLoader = new THREE.TextureLoader();
             
             // Create placeholder material first
             mat = new THREE.MeshLambertMaterial({ color: color });
-            
-            textureLoader.load(colorData.texture, (texture) => {
-              texture.wrapS = THREE.ClampToEdgeWrapping;
-              texture.wrapT = THREE.ClampToEdgeWrapping;
-              texture.anisotropy = rendererRef.current?.capabilities?.getMaxAnisotropy() || 4;
-              texture.minFilter = THREE.LinearMipmapLinearFilter;
-              texture.magFilter = THREE.LinearFilter;
-              texture.generateMipmaps = true;
-              
-              // Create triplanar material for waterfall (isWaterfall = true)
-              // Pass side info: 'left' or 'right' to determine which face is exterior
-              const isLeftWaterfall = side === 'left';
-              const triplanarMat = createTriplanarMaterial(texture, wfLayout, false, color, false, 1.0, true, isLeftWaterfall);
-              mesh.material.dispose();
-              mesh.material = triplanarMat;
-            });
           } else {
             mat = new THREE.MeshLambertMaterial({ color: color });
           }
           
           const mesh = new THREE.Mesh(waterfallGeo, mat);
           mesh.raycast = () => {}; // Disable raycast - selection works via parent slab mesh
+          
+          // Now load texture asynchronously if needed
+          if (wfLayout && colorData.texture) {
+            const waterfallSide = side;
+            loadTextureWithCache(colorData.texture, (texture) => {
+              // Create triplanar material for waterfall (isWaterfall = true)
+              // Pass side info: 'left' or 'right' to determine which face is exterior
+              const isLeftWaterfall = waterfallSide === 'left';
+              const triplanarMat = createTriplanarMaterial(texture, wfLayout, false, color, false, 1.0, true, isLeftWaterfall);
+              mesh.material.dispose();
+              mesh.material = triplanarMat;
+            }, rendererRef);
+          }
           
           // Add outline when selected
           if (isSelectedElement) {
@@ -6069,9 +6113,11 @@ function Configurator({ project, onBack }) {
                     marginBottom: '6px',
                     cursor: 'pointer',
                     background: isSelected ? (groupColorData ? `hsla(${groupColorData.hue}, 60%, 50%, 0.15)` : 'rgba(201,169,98,0.15)') : '#1a1a1a',
-                    border: `2px solid ${isSelected ? (groupColor || '#c9a962') : '#2a2a2a'}`,
+                    borderTop: `2px solid ${isSelected ? (groupColor || '#c9a962') : '#2a2a2a'}`,
+                    borderRight: `2px solid ${isSelected ? (groupColor || '#c9a962') : '#2a2a2a'}`,
+                    borderBottom: `2px solid ${isSelected ? (groupColor || '#c9a962') : '#2a2a2a'}`,
+                    borderLeft: hasGroup ? `4px solid ${groupColor}` : (hasExceedingPiece ? '4px solid #c96262' : `2px solid ${isSelected ? (groupColor || '#c9a962') : '#2a2a2a'}`),
                     borderRadius: '4px',
-                    borderLeft: hasGroup ? `4px solid ${groupColor}` : (hasExceedingPiece ? '4px solid #c96262' : undefined),
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
