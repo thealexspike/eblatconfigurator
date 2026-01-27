@@ -463,12 +463,19 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
   const vertexShader = `
     varying vec3 vLocalPosition;
     varying vec3 vLocalNormal;
+    varying vec3 vWorldNormal;
+    varying vec3 vWorldPosition;
     
     void main() {
       vLocalPosition = position;
       // Use LOCAL normal directly, not transformed by normalMatrix
       // This ensures face detection works regardless of camera angle
       vLocalNormal = normal;
+      // World normal for lighting calculations
+      vWorldNormal = normalize(mat3(modelMatrix) * normal);
+      // World position for lighting
+      vec4 worldPos = modelMatrix * vec4(position, 1.0);
+      vWorldPosition = worldPos.xyz;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `;
@@ -488,6 +495,62 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
     
     varying vec3 vLocalPosition;
     varying vec3 vLocalNormal;
+    varying vec3 vWorldNormal;
+    varying vec3 vWorldPosition;
+    
+    // Simple lighting calculation with simulated AO
+    vec3 calculateLighting(vec3 baseColor, vec3 normal) {
+      // Light directions (normalized)
+      vec3 mainLightDir = normalize(vec3(0.5, 1.0, 0.5));
+      vec3 fillLightDir = normalize(vec3(-0.5, 0.5, -0.5));
+      
+      // Height-based AO (contact shadow - darker very close to ground)
+      float groundHeight = 0.9; // Approximate ground level (90cm countertop height)
+      float distFromGround = max(vWorldPosition.y - groundHeight, 0.0);
+      float contactAO = smoothstep(0.0, 0.15, distFromGround); // Wider range - 15cm falloff
+      contactAO = mix(0.75, 1.0, contactAO);
+      
+      // General height AO (darker at bottom of scene) - wider range
+      float heightAO = smoothstep(0.0, 3.0, vWorldPosition.y);
+      heightAO = mix(0.9, 1.0, heightAO);
+      
+      // Edge/corner AO simulation based on normal direction
+      // Underside surfaces (facing down) are darker - simulates shadowed undersides
+      float upDot = dot(normal, vec3(0.0, 1.0, 0.0));
+      float normalAO = smoothstep(-1.0, 0.3, upDot);
+      normalAO = mix(0.8, 1.0, normalAO);
+      
+      // Cavity AO - darken where surfaces meet at angles
+      // Vertical surfaces get slightly darker to show depth
+      float verticalFactor = abs(upDot);
+      float cavityAO = mix(0.95, 1.0, verticalFactor);
+      
+      // Combined AO factor
+      float aoFactor = contactAO * heightAO * normalAO * cavityAO;
+      
+      // Ambient with AO - BRIGHTER
+      float ambientStrength = 0.6;
+      vec3 ambient = ambientStrength * baseColor * aoFactor;
+      
+      // Main diffuse light with soft shadows - BRIGHTER
+      float mainDiff = max(dot(normal, mainLightDir), 0.0);
+      mainDiff = mainDiff * 0.5 + 0.5; // Half-Lambert for softer look
+      mainDiff = mainDiff * mainDiff; // Square for more natural falloff
+      vec3 mainDiffuse = mainDiff * 0.4 * baseColor;
+      
+      // Fill light (softer, less affected by AO) - BRIGHTER
+      float fillDiff = max(dot(normal, fillLightDir), 0.0);
+      vec3 fillDiffuse = fillDiff * 0.25 * baseColor;
+      
+      // Subtle rim light for edge definition
+      vec3 viewDir = normalize(-vWorldPosition);
+      float rim = 1.0 - max(dot(viewDir, normal), 0.0);
+      rim = smoothstep(0.5, 1.0, rim);
+      vec3 rimLight = rim * 0.1 * vec3(1.0, 0.98, 0.95); // Slightly warm rim
+      
+      // Apply AO to diffuse - less aggressive
+      return ambient + (mainDiffuse + fillDiffuse) * mix(0.92, 1.0, aoFactor) + rimLight;
+    }
     
     void main() {
       vec2 uv;
@@ -594,15 +657,18 @@ function createTriplanarMaterial(texture, layoutInfo, isBacksplash, fallbackColo
             gl_FragColor = vec4(0.79, 0.66, 0.38, 1.0);
           } else {
             // Show texture with slight transparency so tile helper shows through
-            gl_FragColor = vec4(texColor.rgb, 0.9);
+            vec3 litColor = calculateLighting(texColor.rgb, vWorldNormal);
+            gl_FragColor = vec4(litColor, 0.9);
           }
         } else {
           vec4 texColor = texture2D(uTexture, tileUV);
-          gl_FragColor = vec4(texColor.rgb, uOpacity);
+          vec3 litColor = calculateLighting(texColor.rgb, vWorldNormal);
+          gl_FragColor = vec4(litColor, uOpacity);
         }
       } else {
-        // Sides and back: solid color
-        gl_FragColor = vec4(uSideColor, uOpacity);
+        // Sides and back: solid color with lighting
+        vec3 litColor = calculateLighting(uSideColor, vWorldNormal);
+        gl_FragColor = vec4(litColor, uOpacity);
       }
     }
   `;
@@ -4282,9 +4348,34 @@ function Configurator({ project, onBack }) {
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     rendererRef.current = renderer;
 
-    // Lights - flat shading with only ambient for clear texture visibility
-    const ambient = new THREE.AmbientLight(0xffffff, 1.0);
+    // Lights - soft lighting for depth perception
+    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambient);
+    
+    // Main directional light (from top-front-right) for soft shadows
+    const mainLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    mainLight.position.set(5, 10, 5);
+    mainLight.castShadow = true;
+    mainLight.shadow.mapSize.width = 2048;
+    mainLight.shadow.mapSize.height = 2048;
+    mainLight.shadow.camera.near = 0.5;
+    mainLight.shadow.camera.far = 50;
+    mainLight.shadow.camera.left = -10;
+    mainLight.shadow.camera.right = 10;
+    mainLight.shadow.camera.top = 10;
+    mainLight.shadow.camera.bottom = -10;
+    mainLight.shadow.bias = -0.0001;
+    scene.add(mainLight);
+    
+    // Fill light (from opposite side) to soften shadows
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+    fillLight.position.set(-5, 5, -5);
+    scene.add(fillLight);
+    
+    // Hemisphere light for subtle ambient variation (sky/ground)
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.3);
+    hemiLight.position.set(0, 10, 0);
+    scene.add(hemiLight);
 
     // Create XYZ corner grid system (like a 3D graph)
     const gridSize = 5; // 5 meters in each direction
@@ -5013,7 +5104,7 @@ function Configurator({ project, onBack }) {
               });
             } else {
               mesh.material.dispose();
-              mesh.material = new THREE.MeshBasicMaterial({ color: color });
+              mesh.material = new THREE.MeshLambertMaterial({ color: color });
             }
           }
         }
@@ -5161,7 +5252,7 @@ function Configurator({ project, onBack }) {
         const isBacksplash = el.type === 'backsplash';
         
         // Create placeholder material first
-        material = new THREE.MeshBasicMaterial({ color: color });
+        material = new THREE.MeshLambertMaterial({ color: color });
         
         textureLoader.load(colorData.texture, (texture) => {
           // Configure texture
@@ -5193,7 +5284,7 @@ function Configurator({ project, onBack }) {
           mesh.material.needsUpdate = true;
         });
       } else {
-        material = new THREE.MeshBasicMaterial({ color: color });
+        material = new THREE.MeshLambertMaterial({ color: color });
       }
       
       const mesh = new THREE.Mesh(geometry, material);
@@ -5315,7 +5406,7 @@ function Configurator({ project, onBack }) {
             const textureLoader = new THREE.TextureLoader();
             
             // Create placeholder material first
-            mat = new THREE.MeshBasicMaterial({ color: color });
+            mat = new THREE.MeshLambertMaterial({ color: color });
             
             textureLoader.load(colorData.texture, (texture) => {
               texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -5333,7 +5424,7 @@ function Configurator({ project, onBack }) {
               mesh.material = triplanarMat;
             });
           } else {
-            mat = new THREE.MeshBasicMaterial({ color: color });
+            mat = new THREE.MeshLambertMaterial({ color: color });
           }
           
           const mesh = new THREE.Mesh(waterfallGeo, mat);
