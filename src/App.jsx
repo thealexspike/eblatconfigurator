@@ -8024,18 +8024,20 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
     const CM_TO_MM = 10;
     
     // Spacing between tiles in the DXF layout (mm)
-    const TILE_SPACING = 50;
+    const TILE_SPACING = 100; // 100mm = 10cm spacing between tiles
     
-    // Calculate tile positions (same arrangement as footer - horizontal rows)
+    // Calculate tile positions (same arrangement as footer - tiles side by side)
+    // In footer: tileW = format.length, tileH = format.width
     const tilePositions = [];
     let currentX = 0;
     let currentY = 0;
     let rowMaxHeight = 0;
-    const maxRowWidth = 5000; // Max row width before wrapping (mm)
+    const maxRowWidth = 10000; // Max row width before wrapping (mm)
     
     tiles.forEach((tile, tileIdx) => {
-      const tileW = (tile.format?.width || 160) * CM_TO_MM;
-      const tileH = (tile.format?.height || 320) * CM_TO_MM;
+      // Match footer logic: length on X axis, width on Y axis
+      const tileW = (tile.format?.length || 320) * CM_TO_MM;
+      const tileH = (tile.format?.width || 160) * CM_TO_MM;
       
       // Check if we need to wrap to next row
       if (currentX + tileW > maxRowWidth && currentX > 0) {
@@ -8080,7 +8082,7 @@ TABLE
 2
 LAYER
 70
-3
+4
 0
 LAYER
 2
@@ -8091,6 +8093,16 @@ PLACI
 8
 6
 CONTINUOUS
+0
+LAYER
+2
+COTA_ROSU
+70
+0
+62
+6
+6
+DASHED
 0
 LAYER
 2
@@ -8157,6 +8169,28 @@ ${radius.toFixed(3)}
 `;
     };
     
+    // Helper to create text (MTEXT for multiline support)
+    const createText = (x, y, text, height, layer, alignment = 'center') => {
+      // alignment: 'center', 'left', 'right'
+      // Use attachment point: 1=TL, 2=TC, 3=TR, 4=ML, 5=MC, 6=MR, 7=BL, 8=BC, 9=BR
+      const attachmentPoint = alignment === 'center' ? 5 : (alignment === 'left' ? 4 : 6);
+      return `0
+MTEXT
+8
+${layer}
+10
+${x.toFixed(3)}
+20
+${y.toFixed(3)}
+40
+${height.toFixed(3)}
+71
+${attachmentPoint}
+1
+${text}
+`;
+    };
+    
     // Helper to create rectangle polyline with optional corner radius
     const createRectangle = (x, y, w, h, cornerRadius, layer) => {
       if (cornerRadius && cornerRadius > 0) {
@@ -8199,9 +8233,35 @@ ${radius.toFixed(3)}
       }
     };
     
-    // Draw tiles (PLACI layer)
-    tilePositions.forEach(tp => {
-      dxf += createRectangle(tp.x, tp.y - tp.h, tp.w, tp.h, 0, 'PLACI');
+    // Draw tiles (PLACI layer) with labels above
+    tilePositions.forEach((tp, idx) => {
+      const tile = tiles[tp.tileIdx];
+      const tileBottom = tp.y - tp.h;
+      
+      // Draw tile rectangle
+      dxf += createRectangle(tp.x, tileBottom, tp.w, tp.h, 0, 'PLACI');
+      
+      // Get tile info for label
+      const colorData = getColorById(tile.colorId);
+      const format = tile.format || { length: 320, width: 160 };
+      const thickness = tile.thickness || 12;
+      
+      // Draw COTA_ROSU - rough cut offset for the tile (1cm = 10mm larger on each side)
+      const OFFSET = 10; // 1cm = 10mm
+      dxf += createRectangle(
+        tp.x - OFFSET, 
+        tileBottom - OFFSET, 
+        tp.w + OFFSET * 2, 
+        tp.h + OFFSET * 2, 
+        0, 
+        'COTA_ROSU'
+      );
+      
+      // Label at top-left of tile: "Culoare Dimensiuni Grosime" - on PLACI layer
+      const labelText = `${colorData.name} ${format.length}x${format.width}cm ${thickness}mm`;
+      const labelX = tp.x; // Left edge of tile
+      const labelY = tp.y + 80; // 80mm above tile (30 + 50)
+      dxf += createText(labelX, labelY, labelText, 100, 'PLACI', 'left'); // 100mm text height (40 * 2.5), left-aligned
     });
     
     // Draw pieces (PIESE layer) and cutouts (DECUPAJE layer)
@@ -8210,63 +8270,106 @@ ${radius.toFixed(3)}
       if (!tp) return;
       
       // Piece position relative to tile (convert from cm to mm)
+      // In footer: p.x is from left, p.y is from TOP (CSS coordinates)
+      // In DXF: Y increases upward, so we need to invert Y
+      // Tile bottom-left is at (tp.x, tp.y - tp.h)
+      // Piece in footer: top at p.y, bottom at p.y + pieceH
+      // In DXF: bottom at tileTop - p.y - pieceH, top at tileTop - p.y
       const pieceX = tp.x + p.x * CM_TO_MM;
-      const pieceY = tp.y - tp.h + p.y * CM_TO_MM; // Y is from bottom
       const pieceW = p.pieceW * CM_TO_MM;
       const pieceH = p.pieceH * CM_TO_MM;
+      // Convert from top-down (footer) to bottom-up (DXF)
+      const pieceY = tp.y - (p.y * CM_TO_MM) - pieceH;
       
-      // Draw piece outline
+      // Draw piece outline (finished size)
       dxf += createRectangle(pieceX, pieceY, pieceW, pieceH, 0, 'PIESE');
+      
+      // Piece center for cutout calculations
+      const pieceCenterX = pieceX + pieceW / 2;
+      const pieceCenterY = pieceY + pieceH / 2;
+      
+      // Piece label in BOTTOM-LEFT corner: "#01 200×60cm" - on PIESE layer
+      const pieceLabel = `#${p.pieceNumber} ${p.pieceW}x${p.pieceH}cm`;
+      const labelX = pieceX + 20; // 20mm from left edge
+      const labelY = pieceY + 20; // 20mm from bottom edge
+      dxf += createText(labelX, labelY, pieceLabel, 25, 'PIESE', 'left'); // 25mm text height, left-aligned, on PIESE layer
       
       // Draw cutouts if any
       const element = elements.find(e => e.id === p.elementId);
       if (element?.cutouts) {
-        element.cutouts.forEach(cutout => {
-          // Get piece dimensions for coordinate conversion
-          const pieceLengthCm = element.type === 'backsplash' ? element.length : element.length;
-          const pieceDepthCm = element.type === 'backsplash' ? element.height : element.depth;
-          
-          // Convert center coords to corner coords
-          // cutout.centerX/Y are relative to piece center
-          // We need to place them correctly considering rotation
+        element.cutouts.forEach((cutout, cutoutIdx) => {
+          // Cutout center coords are stored as cutout.center.x (along piece length) and cutout.center.z (along piece depth)
+          // These are relative to piece center in cm
+          // In DXF: Y increases upward, piece depth (z) maps to DXF Y axis
           const isRotated = p.isRotated;
+          
+          // Get cutout center relative to piece center (in cm)
+          const cutoutCenterX = cutout.center?.x || 0; // Along piece length
+          const cutoutCenterZ = cutout.center?.z || 0; // Along piece depth (front/back)
+          
+          // Cutout number (e.g., "D1", "D2")
+          const cutoutNumber = `D${cutoutIdx + 1}`;
           
           if (cutout.type === 'circle') {
             const radius = (cutout.radius || 1.6) * CM_TO_MM;
             let cx, cy;
             
             if (isRotated) {
-              // Rotated 90° CW: swap and flip
-              cx = pieceX + (pieceDepthCm / 2 + cutout.centerY) * CM_TO_MM;
-              cy = pieceY + (pieceLengthCm / 2 - cutout.centerX) * CM_TO_MM;
+              // Rotated 90° CW on tile: piece length becomes vertical, depth becomes horizontal
+              cx = pieceCenterX + cutoutCenterZ * CM_TO_MM;
+              cy = pieceCenterY + cutoutCenterX * CM_TO_MM;
             } else {
-              cx = pieceX + (pieceLengthCm / 2 + cutout.centerX) * CM_TO_MM;
-              cy = pieceY + (pieceDepthCm / 2 + cutout.centerY) * CM_TO_MM;
+              // Not rotated: piece length is horizontal (X), depth is vertical (Y in DXF)
+              cx = pieceCenterX + cutoutCenterX * CM_TO_MM;
+              cy = pieceCenterY - cutoutCenterZ * CM_TO_MM; // Flip Z because DXF Y is up, our Z is "forward"
             }
             
             dxf += createCircle(cx, cy, radius, 'DECUPAJE');
+            
+            // Cutout label: "D1 Ø32" (number and diameter in mm) - on DECUPAJE layer
+            const diameterMm = (cutout.radius || 1.6) * 2 * 10; // Convert cm to mm
+            const cutoutLabel = `${cutoutNumber} O${diameterMm.toFixed(0)}mm`;
+            dxf += createText(cx, cy, cutoutLabel, 15, 'DECUPAJE'); // 15mm text height, on DECUPAJE layer
           } else {
             // Rectangle cutout
             const cutW = (cutout.width || 10) * CM_TO_MM;
             const cutH = (cutout.height || 10) * CM_TO_MM;
             const cornerR = (cutout.cornerRadius || 0) * CM_TO_MM;
             
-            let cutX, cutY, drawW, drawH;
+            let cutX, cutY, drawW, drawH, labelCx, labelCy;
             
             if (isRotated) {
-              // Rotated: swap dimensions and adjust position
-              cutX = pieceX + (pieceDepthCm / 2 + cutout.centerY) * CM_TO_MM - cutH / 2;
-              cutY = pieceY + (pieceLengthCm / 2 - cutout.centerX) * CM_TO_MM - cutW / 2;
+              // Rotated: swap dimensions, length->Y, depth->X
+              const cx = pieceCenterX + cutoutCenterZ * CM_TO_MM;
+              const cy = pieceCenterY + cutoutCenterX * CM_TO_MM;
+              // When rotated, cutout.width (along length) becomes vertical, height (along depth) becomes horizontal
+              cutX = cx - cutH / 2;
+              cutY = cy - cutW / 2;
               drawW = cutH;
               drawH = cutW;
+              labelCx = cx;
+              labelCy = cy;
             } else {
-              cutX = pieceX + (pieceLengthCm / 2 + cutout.centerX) * CM_TO_MM - cutW / 2;
-              cutY = pieceY + (pieceDepthCm / 2 + cutout.centerY) * CM_TO_MM - cutH / 2;
+              // Not rotated: width along X, height along Y
+              const cx = pieceCenterX + cutoutCenterX * CM_TO_MM;
+              const cy = pieceCenterY - cutoutCenterZ * CM_TO_MM;
+              cutX = cx - cutW / 2;
+              cutY = cy - cutH / 2;
               drawW = cutW;
               drawH = cutH;
+              labelCx = cx;
+              labelCy = cy;
             }
             
             dxf += createRectangle(cutX, cutY, drawW, drawH, cornerR, 'DECUPAJE');
+            
+            // Cutout label: "D1 50x40" + corner radius if exists - on DECUPAJE layer
+            let cutoutLabel = `${cutoutNumber} ${cutout.width || 10}x${cutout.height || 10}`;
+            if (cutout.cornerRadius && cutout.cornerRadius > 0) {
+              const cornerRadiusMm = cutout.cornerRadius * 10; // Convert cm to mm
+              cutoutLabel += ` R${cornerRadiusMm.toFixed(0)}`;
+            }
+            dxf += createText(labelCx, labelCy, cutoutLabel, 15, 'DECUPAJE'); // 15mm text height, on DECUPAJE layer
           }
         });
       }
