@@ -354,19 +354,21 @@ function createGeometryWithCutouts(widthCm, heightCm, thicknessMm, cutouts = [],
   
   const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
   
+  // ExtrudeGeometry creates shape on XY plane, extruded from Z=0 to Z=depth
+  // We need to center it first, then rotate/position based on orientation
+  
+  // Center the extrusion on Z axis (from -thickness/2 to +thickness/2)
+  geometry.translate(0, 0, -thickness / 2);
+  
   // Rotate and position geometry based on orientation
   if (isBacksplash) {
-    // Backsplash: vertical panel
-    // ExtrudeGeometry creates on XY plane extruded on Z
-    // We need XY plane (width, height) with Z = thickness
-    // Actually this is correct, just center it
-    geometry.translate(0, 0, -thickness / 2);
+    // Backsplash: vertical panel on XY plane, thickness on Z
+    // Already correct after centering above
   } else {
-    // Slab: horizontal panel
-    // We need XZ plane (width, depth) with Y = thickness
+    // Slab: horizontal panel on XZ plane, thickness on Y
     // Rotate 90° on X axis to lay flat
+    // After rotation: Z becomes -Y, so geometry extends from -thickness/2 to +thickness/2 on Y
     geometry.rotateX(-Math.PI / 2);
-    geometry.translate(0, thickness / 2, 0);
   }
   
   return geometry;
@@ -5129,7 +5131,7 @@ function Configurator({ project, onBack }) {
 
       const width = el.length / 100;
       const thicknessCm = (el.thickness || 12) / 1000;
-      const placementHeight = (el.placementHeight || 0) / 100;
+      const placementHeight = (el.placementHeight ?? 90) / 100; // Default 90cm from floor
       
       // Get layout info for this piece
       const layoutInfo = layout[`${el.id}_main`];
