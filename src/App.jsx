@@ -893,7 +893,7 @@ function computeLayout(elements, library, fixedPieces = {}) {
   const tiles = [];
   const piecesByKey = {};
   
-  if (!elements || elements.length === 0) {
+  if (!elements || elements.length === 0 || !library || !library.colors) {
     return { pieces, tiles, piecesByKey };
   }
   
@@ -3510,8 +3510,13 @@ function Configurator({ project, onBack }) {
   const loadedTexturesCountRef = useRef(0);
   
   // Check periodically if new textures have loaded
+  // Note: This runs independently and updates forceRenderKey when textures load
   useEffect(() => {
+    let isMounted = true;
+    
     const checkInterval = setInterval(() => {
+      if (!isMounted) return;
+      
       // Count how many textures are fully loaded
       const loadedCount = Array.from(textureCache.values()).filter(t => t.loaded).length;
       
@@ -3520,9 +3525,12 @@ function Configurator({ project, onBack }) {
         loadedTexturesCountRef.current = loadedCount;
         setForceRenderKey(prev => prev + 1);
       }
-    }, 300);
+    }, 500); // Increased interval to reduce load
     
-    return () => clearInterval(checkInterval);
+    return () => {
+      isMounted = false;
+      clearInterval(checkInterval);
+    };
   }, []);
   
   // Track previous element dimensions to detect changes and invalidate manual positions
@@ -5540,18 +5548,20 @@ function Configurator({ project, onBack }) {
   }, [elements, selectedIds, library, pieceLayout, groups, debugTexture, forceRenderKey, selectedCutoutId]);
 
   // Helper functions
-  const getColorById = (id) => library.colors.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
+  const getColorById = (id) => library?.colors?.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
   const getManufacturerForColor = (colorId) => {
-    const color = library.colors.find(c => c.id === colorId);
-    return color?.manufacturer || library.manufacturers[0]?.id;
+    const color = library?.colors?.find(c => c.id === colorId);
+    return color?.manufacturer || library?.manufacturers?.[0]?.id;
   };
 
   const getThicknessesForColor = (colorId) => {
+    if (!library?.formats) return [12];
     return [...new Set(library.formats.filter(f => f.colorId === colorId).map(f => f.thickness))].sort((a, b) => a - b);
   };
 
   const addElement = (type) => {
-    const firstColor = library.colors[0];
+    const firstColor = library?.colors?.[0];
+    if (!firstColor) return; // Guard against no colors
     const thicknesses = getThicknessesForColor(firstColor?.id);
     
     // For blat (island type), prefer 12mm if available
@@ -7097,16 +7107,16 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
   // For backward compat
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   
-  const getColorById = (id) => library.colors.find(c => c.id === id) || { name: 'N/A', color: '#666' };
+  const getColorById = (id) => library?.colors?.find(c => c.id === id) || { name: 'N/A', color: '#666' };
   
   const getMaterialType = (colorId) => {
-    const color = library.colors.find(c => c.id === colorId);
+    const color = library?.colors?.find(c => c.id === colorId);
     if (!color) return '';
-    const manufacturer = library.manufacturers.find(m => m.id === color.manufacturer);
+    const manufacturer = library?.manufacturers?.find(m => m.id === color.manufacturer);
     return manufacturer?.materialType || '';
   };
   
-  const getFormatById = (formatId) => library.formats.find(f => f.id === formatId);
+  const getFormatById = (formatId) => library?.formats?.find(f => f.id === formatId);
   
   // Use the shared computeLayout function - SINGLE SOURCE OF TRUTH
   const { pieces: rawPieces, tiles } = useMemo(() => computeLayout(elements, library, manualPositions), [elements, library, manualPositions]);
@@ -7118,7 +7128,7 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
   }));
   
   // Calculate uniform scale for drag calculations
-  const maxTileWidth = Math.max(...tiles.map(t => t.format?.width || 160), 160);
+  const maxTileWidth = tiles.length > 0 ? Math.max(...tiles.map(t => t.format?.width || 160)) : 160;
   const baseScale = 100 / maxTileWidth;
   const uniformScale = baseScale * (footerZoom ? 2 : 1);
   
