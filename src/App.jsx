@@ -897,11 +897,14 @@ function computeLayout(elements, library, fixedPieces = {}) {
     return { pieces, tiles, piecesByKey };
   }
   
+  // Filter out cabinets - they don't need layout calculation
+  const layoutElements = elements.filter(el => el.type !== 'cabinet');
+  
   // Step 1: Separate slab+waterfall sets from standalone pieces
   const slabSets = [];
   const standalonePieces = [];
   
-  elements.forEach(el => {
+  layoutElements.forEach(el => {
     const thickness = el.thickness || 12;
     const colorId = el.material;
     const waterfallH = el.waterfallHeight || el.placementHeight || 90;
@@ -3651,10 +3654,13 @@ function Configurator({ project, onBack }) {
           };
           setLibrary(loadedLibrary);
           
-          // Validate materials in project elements
+          // Validate materials in project elements (exclude cabinets which don't use library materials)
           if (project?.elements?.length > 0) {
             const warnings = [];
             project.elements.forEach(el => {
+              // Skip cabinets - they use custom color, not library material
+              if (el.type === 'cabinet') return;
+              
               const color = loadedLibrary.colors.find(c => c.id === el.material);
               if (!color) {
                 warnings.push({
@@ -4066,8 +4072,14 @@ function Configurator({ project, onBack }) {
             // Get dimensions of moving element
             const elRotation = (pending.rotation || 0) % 360;
             const isRotated90 = Math.abs(elRotation % 180 - 90) < 5;
-            let movingWidth = el.length / 100;
-            let movingDepth = el.type === 'backsplash' ? (el.thickness || 12) / 1000 : el.depth / 100;
+            let movingWidth, movingDepth;
+            if (el.type === 'cabinet') {
+              movingWidth = (el.width || 60) / 100;
+              movingDepth = (el.depth || 60) / 100;
+            } else {
+              movingWidth = el.length / 100;
+              movingDepth = el.type === 'backsplash' ? (el.thickness || 12) / 1000 : el.depth / 100;
+            }
             if (isRotated90) [movingWidth, movingDepth] = [movingDepth, movingWidth];
             
             // Moving element's 5 snap points: 4 corners + center front
@@ -4106,8 +4118,14 @@ function Configurator({ project, onBack }) {
                 const otherRot = (pendingElementTransforms[other.id]?.rotation ?? other.rotation ?? 0) % 360;
                 const otherIsRotated90 = Math.abs(otherRot % 180 - 90) < 5;
                 
-                let otherWidth = other.length / 100;
-                let otherDepth = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
+                let otherWidth, otherDepth;
+                if (other.type === 'cabinet') {
+                  otherWidth = (other.width || 60) / 100;
+                  otherDepth = (other.depth || 60) / 100;
+                } else {
+                  otherWidth = other.length / 100;
+                  otherDepth = other.type === 'backsplash' ? (other.thickness || 12) / 1000 : other.depth / 100;
+                }
                 if (otherIsRotated90) [otherWidth, otherDepth] = [otherDepth, otherWidth];
                 
                 // Other element's 5 snap points
@@ -5029,10 +5047,12 @@ function Configurator({ project, onBack }) {
     return JSON.stringify({
       type: el.type,
       length: el.length,
+      width: el.width,  // For cabinet
       depth: el.depth,
       height: el.height,
       thickness: el.thickness,
       material: el.material,
+      color: el.color,  // For cabinet
       placementHeight: el.placementHeight,
       waterfallLeft: el.waterfallLeft,
       waterfallRight: el.waterfallRight,
@@ -5211,8 +5231,26 @@ function Configurator({ project, onBack }) {
               child.add(outline);
             }
           });
-          
-          // Add debug tile helper if debug mode is active
+        } else if (el.type === 'cabinet') {
+          // Cabinet not selected: always show black edges (not x-ray)
+          mesh.traverse((child) => {
+            if (child.isMesh && child.geometry && !child.userData?.isDebugTileHelper) {
+              const edges = new THREE.EdgesGeometry(child.geometry, 15);
+              const lineMaterial = new THREE.LineBasicMaterial({ 
+                color: 0x404040, 
+                linewidth: 2,
+                depthTest: true,  // Not x-ray - respects depth
+                transparent: false
+              });
+              const outline = new THREE.LineSegments(edges, lineMaterial);
+              outline.raycast = () => {};
+              child.add(outline);
+            }
+          });
+        }
+        
+        // Add debug tile helper if debug mode is active (only for selected non-cabinet elements)
+        if (shouldHighlight && el.type !== 'cabinet') {
           const isDebugActive = debugTexture && shouldHighlight;
           const layoutInfo = layout[`${el.id}_main`];
           const colorData = library.colors.find(c => c.id === el.material) || { color: '#666666' };
@@ -5222,9 +5260,10 @@ function Configurator({ project, onBack }) {
             const color = new THREE.Color(colorData.color);
             createTileHelper(mesh, layoutInfo, colorData, isBacksplash, color, { rendererRef, sceneRef, cameraRef });
           }
+        }
           
-          // Add cutout highlight if a cutout is selected
-          if (selectedCutoutId && el.cutouts) {
+        // Add cutout highlight if a cutout is selected
+        if (selectedCutoutId && el.cutouts) {
             const selectedCutout = el.cutouts.find(c => c.id === selectedCutoutId);
             if (selectedCutout) {
               const isBacksplash = el.type === 'backsplash';
@@ -5275,7 +5314,6 @@ function Configurator({ project, onBack }) {
               mesh.add(outlineMesh);
             }
           }
-        }
         
         // Update position/rotation too
         const worldPos = getWorldPosition(el);
@@ -5297,6 +5335,68 @@ function Configurator({ project, onBack }) {
           }
         });
         delete meshesRef.current[el.id];
+      }
+
+      // Handle cabinet (furniture) separately - simple box with solid color
+      if (el.type === 'cabinet') {
+        const cabinetWidth = (el.width || 60) / 100;
+        const cabinetDepth = (el.depth || 60) / 100;
+        const cabinetHeight = (el.height || 85) / 100;
+        const placementHeight = (el.placementHeight ?? 0) / 100;
+        
+        const geometry = new THREE.BoxGeometry(cabinetWidth, cabinetHeight, cabinetDepth);
+        const color = new THREE.Color(el.color || '#4a4a4a');
+        const material = new THREE.MeshLambertMaterial({ color: color });
+        
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        
+        // Position
+        const worldPos = getWorldPosition(el);
+        const worldRot = getWorldRotation(el);
+        mesh.position.set(worldPos.x, placementHeight + cabinetHeight / 2, worldPos.z);
+        mesh.rotation.y = (worldRot * Math.PI) / 180;
+        
+        // Add edges - different style based on selection
+        const edges = new THREE.EdgesGeometry(geometry, 15);
+        const groupColorData = getGroupColor(el.groupId);
+        
+        if (shouldHighlight) {
+          // Selected: gold/group color, x-ray
+          const outlineColor = groupColorData ? groupColorData.hex : 0xc9a962;
+          const lineMaterial = new THREE.LineBasicMaterial({ 
+            color: outlineColor, 
+            linewidth: 2,
+            depthTest: false,  // X-ray when selected
+            transparent: true,
+            opacity: 1
+          });
+          const outline = new THREE.LineSegments(edges, lineMaterial);
+          outline.renderOrder = 998;
+          outline.raycast = () => {};
+          mesh.add(outline);
+        } else {
+          // Not selected: black, not x-ray
+          const lineMaterial = new THREE.LineBasicMaterial({ 
+            color: 0x404040, 
+            linewidth: 2,
+            depthTest: true,  // Not x-ray
+            transparent: false
+          });
+          const outline = new THREE.LineSegments(edges, lineMaterial);
+          outline.raycast = () => {};
+          mesh.add(outline);
+        }
+        
+        mesh.userData = { elementId: el.id, type: 'cabinet' };
+        sceneRef.current.add(mesh);
+        meshesRef.current[el.id] = mesh;
+        
+        // Store selection state for next comparison
+        prevElementsRef.current[el.id] = { ...el, _wasSelected: shouldHighlight };
+        prevLayoutRef.current[el.id] = getLayoutHash(el.id);
+        return; // Skip the rest of the mesh creation logic
       }
 
       const colorData = library.colors.find(c => c.id === el.material) || { color: '#666666' };
@@ -5582,6 +5682,28 @@ function Configurator({ project, onBack }) {
   };
 
   const addElement = (type) => {
+    // Cabinet doesn't need material from library
+    if (type === 'cabinet') {
+      const el = {
+        id: generateId(),
+        type: 'cabinet',
+        name: 'Corp mobilier',
+        width: 60,      // cm
+        depth: 60,      // cm
+        height: 90,     // cm (standard kitchen cabinet height)
+        placementHeight: 0, // on floor
+        color: '#4a4a4a', // default gray color
+        position: { 
+          x: 0.5,  // 50cm from wall
+          z: 0.5   // 50cm from wall
+        },
+        rotation: 0,
+      };
+      setElements([...elements, el]);
+      setSelectedId(el.id);
+      return;
+    }
+    
     const firstColor = library?.colors?.[0];
     if (!firstColor) return; // Guard against no colors
     const thicknesses = getThicknessesForColor(firstColor?.id);
@@ -5701,6 +5823,14 @@ function Configurator({ project, onBack }) {
     
     const selectedEls = elements.filter(el => selectedIds.includes(el.id));
     
+    // Check if any selected element is already in a group
+    const elementsInGroups = selectedEls.filter(el => el.groupId);
+    if (elementsInGroups.length > 0) {
+      // Show error notification
+      showNotification('Nu poți grupa elemente care sunt deja într-un grup. Degrupează-le mai întâi (Ctrl+X).', 'error');
+      return;
+    }
+    
     // Calculate center of selection (will be group position)
     const centerX = selectedEls.reduce((sum, el) => sum + (getWorldPosition(el).x), 0) / selectedEls.length;
     const centerZ = selectedEls.reduce((sum, el) => sum + (getWorldPosition(el).z), 0) / selectedEls.length;
@@ -5808,6 +5938,10 @@ function Configurator({ project, onBack }) {
         // Remove group from selection
         setSelectedIds(selectedIds.filter(sid => !groupMembers.includes(sid)));
       } else {
+        // If clicking on already selected group member, don't change selection (allows drag)
+        if (selectedIds.includes(id)) {
+          return;
+        }
         // Select only this group
         setSelectedIds(groupMembers);
       }
@@ -5823,6 +5957,10 @@ function Configurator({ project, onBack }) {
       // Remove from selection
       setSelectedIds(selectedIds.filter(sid => sid !== id));
     } else {
+      // If clicking on already selected element, don't change selection (allows multi-drag)
+      if (selectedIds.includes(id)) {
+        return;
+      }
       // Single select
       setSelectedIds([id]);
     }
@@ -5853,16 +5991,22 @@ function Configurator({ project, onBack }) {
 
   // Clipboard for copy/paste
   const [clipboard, setClipboard] = useState(null);
-  const [notification, setNotification] = useState(null); // { message, type: 'success' | 'error', fading: boolean }
+  const [notifications, setNotifications] = useState([]); // Array of { id, message, type, fading }
   
   const showNotification = useCallback((message, type = 'success') => {
-    setNotification({ message, type, fading: false });
-    // Start fade out after 2 seconds
+    const id = Date.now() + Math.random();
+    
+    // Add new notification
+    setNotifications(prev => [...prev, { id, message, type, fading: false }]);
+    
+    // Start fade out after 3 seconds
     setTimeout(() => {
-      setNotification(prev => prev ? { ...prev, fading: true } : null);
-    }, 2000);
-    // Remove after fade completes (500ms fade)
-    setTimeout(() => setNotification(null), 2500);
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, fading: true } : n));
+      // Remove after fade completes (500ms fade)
+      setTimeout(() => {
+        setNotifications(prev => prev.filter(n => n.id !== id));
+      }, 500);
+    }, 3000);
   }, []);
   
   const copySelected = useCallback(() => {
@@ -6117,6 +6261,7 @@ function Configurator({ project, onBack }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
               <button onClick={() => addElement('island')} style={{ padding: '8px', background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', cursor: 'pointer', fontSize: '11px', textAlign: 'left', borderRadius: '4px' }}>+ Blat</button>
               <button onClick={() => addElement('backsplash')} style={{ padding: '8px', background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', cursor: 'pointer', fontSize: '11px', textAlign: 'left', borderRadius: '4px' }}>+ Contrablat</button>
+              <button onClick={() => addElement('cabinet')} style={{ padding: '8px', background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#888', cursor: 'pointer', fontSize: '11px', textAlign: 'left', borderRadius: '4px' }}>+ Corp mobilier</button>
             </div>
           </div>
 
@@ -6178,12 +6323,24 @@ function Configurator({ project, onBack }) {
                         {el.name}
                         {hasGroup && <span style={{ fontSize: '9px', color: groupColor, background: 'rgba(255,255,255,0.1)', padding: '1px 4px', borderRadius: '3px' }}>GRUP</span>}
                         {hasExceedingPiece && <span style={{ fontSize: '9px', color: '#c96262', background: 'rgba(201,98,98,0.2)', padding: '1px 4px', borderRadius: '3px' }}>⚠️</span>}
+                        {el.type === 'cabinet' && <span style={{ fontSize: '9px', color: '#888', background: 'rgba(150,150,150,0.2)', padding: '1px 4px', borderRadius: '3px' }}>MOBILIER</span>}
                       </div>
-                      <div style={{ fontSize: '10px', color: hasExceedingPiece ? '#c96262' : '#666' }}>{el.length}×{el.type === 'backsplash' ? el.height : el.depth}cm • {el.thickness}mm</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
-                        <div style={{ width: '12px', height: '12px', background: getColorById(el.material)?.color, borderRadius: '2px', border: '1px solid #333' }} />
-                        <span style={{ fontSize: '10px', color: '#888' }}>{getColorById(el.material)?.name}</span>
-                      </div>
+                      {el.type === 'cabinet' ? (
+                        <div style={{ fontSize: '10px', color: '#666' }}>{el.width}×{el.depth}×{el.height}cm</div>
+                      ) : (
+                        <div style={{ fontSize: '10px', color: hasExceedingPiece ? '#c96262' : '#666' }}>{el.length}×{el.type === 'backsplash' ? el.height : el.depth}cm • {el.thickness}mm</div>
+                      )}
+                      {el.type === 'cabinet' ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+                          <div style={{ width: '12px', height: '12px', background: el.color || '#4a4a4a', borderRadius: '2px', border: '1px solid #333' }} />
+                          <span style={{ fontSize: '10px', color: '#888' }}>Culoare personalizată</span>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+                          <div style={{ width: '12px', height: '12px', background: getColorById(el.material)?.color, borderRadius: '2px', border: '1px solid #333' }} />
+                          <span style={{ fontSize: '10px', color: '#888' }}>{getColorById(el.material)?.name}</span>
+                        </div>
+                      )}
                       {hasCutouts && (
                         <div style={{ fontSize: '9px', color: '#888', marginTop: '6px' }}>
                           <div style={{ marginBottom: '2px' }}>✂️ Goluri:</div>
@@ -6212,26 +6369,36 @@ function Configurator({ project, onBack }) {
         <div style={{ flex: 1, position: 'relative', background: '#111', minWidth: 0 }}>
           <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
           
-          {/* Copy/Paste Notification */}
-          {notification && (
+          {/* Notifications Stack */}
+          {notifications.length > 0 && (
             <div style={{ 
               position: 'absolute', 
               top: '12px', 
               left: '12px', 
-              background: notification.type === 'success' ? 'rgba(74,153,74,0.95)' : 'rgba(201,98,98,0.95)', 
-              color: '#fff', 
-              padding: '8px 16px', 
-              borderRadius: '6px',
-              fontSize: '12px',
-              fontWeight: 500,
-              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
               zIndex: 100,
               pointerEvents: 'none',
-              opacity: notification.fading ? 0 : 1,
-              transform: notification.fading ? 'translateY(-10px)' : 'translateY(0)',
-              transition: 'opacity 0.5s ease-out, transform 0.5s ease-out',
             }}>
-              {notification.type === 'success' ? '✓' : '✗'} {notification.message}
+              {notifications.map((notification) => (
+                <div 
+                  key={notification.id}
+                  style={{ 
+                    background: notification.type === 'success' ? 'rgba(74,153,74,0.95)' : 'rgba(201,98,98,0.95)', 
+                    color: '#fff', 
+                    padding: '8px 16px', 
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                    opacity: notification.fading ? 0 : 1,
+                    transform: notification.fading ? 'translateX(-20px)' : 'translateX(0)',
+                    transition: 'opacity 0.5s ease-out, transform 0.5s ease-out',
+                  }}>
+                  {notification.type === 'success' ? '✓' : '✗'} {notification.message}
+                </div>
+              ))}
             </div>
           )}
           
@@ -6268,6 +6435,61 @@ function Configurator({ project, onBack }) {
                 <div style={{ fontSize: '12px', color: '#888' }}>elemente selectate</div>
               </div>
               
+              {/* Cabinet color change for multiple cabinets */}
+              {(() => {
+                const selectedCabinets = elements.filter(el => selectedIds.includes(el.id) && el.type === 'cabinet');
+                if (selectedCabinets.length > 0) {
+                  const updateAllCabinetsColor = (newColor) => {
+                    const cabinetIds = selectedCabinets.map(c => c.id);
+                    setElements(prev => prev.map(el => 
+                      cabinetIds.includes(el.id) ? { ...el, color: newColor } : el
+                    ));
+                  };
+                  return (
+                    <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                      <div style={{ fontSize: '10px', color: '#888', marginBottom: '10px', fontWeight: 600 }}>
+                        🎨 CULOARE CORPURI ({selectedCabinets.length})
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <input 
+                          type="color" 
+                          value={selectedCabinets[0]?.color || '#4a4a4a'} 
+                          onChange={e => updateAllCabinetsColor(e.target.value)} 
+                          style={{ 
+                            width: '40px', 
+                            height: '40px', 
+                            border: '1px solid #333', 
+                            borderRadius: '4px', 
+                            cursor: 'pointer',
+                            padding: 0,
+                            background: 'transparent'
+                          }} 
+                        />
+                        <span style={{ fontSize: '11px', color: '#666' }}>Aplică la toate corpurile selectate</span>
+                      </div>
+                      {/* Quick color presets */}
+                      <div style={{ display: 'flex', gap: '4px', marginTop: '8px', flexWrap: 'wrap' }}>
+                        {['#2a2a2a', '#4a4a4a', '#6a6a6a', '#8a8a8a', '#f5f5f5', '#8B4513', '#D2691E', '#F5DEB3'].map(c => (
+                          <div 
+                            key={c}
+                            onClick={() => updateAllCabinetsColor(c)}
+                            style={{ 
+                              width: '24px', 
+                              height: '24px', 
+                              background: c, 
+                              border: '1px solid #333',
+                              borderRadius: '4px',
+                              cursor: 'pointer'
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+              
               <div style={{ fontSize: '11px', color: '#666', marginBottom: '12px' }}>
                 Poți să:
               </div>
@@ -6288,6 +6510,114 @@ function Configurator({ project, onBack }) {
               )}
             </div>
           ) : selected ? (
+            selected.type === 'cabinet' ? (
+              // Cabinet properties panel
+              <div style={{ padding: '12px' }}>
+                {/* Header with type badge */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <div style={{ fontSize: '11px', color: '#888' }}>PROPRIETĂȚI</div>
+                  <div style={{ 
+                    fontSize: '10px', 
+                    padding: '2px 8px', 
+                    background: 'rgba(150,150,150,0.2)',
+                    color: '#999',
+                    borderRadius: '4px'
+                  }}>
+                    CORP MOBILIER
+                  </div>
+                </div>
+
+                {/* Name */}
+                <div style={{ marginBottom: '12px' }}>
+                  <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Nume</label>
+                  <input type="text" value={selected.name} onChange={e => updateElement(selected.id, { name: e.target.value })} style={{ ...inputStyle, padding: '8px' }} />
+                </div>
+
+                {/* Dimensions Section */}
+                <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                  <div style={{ fontSize: '10px', color: '#888', marginBottom: '10px', fontWeight: 600 }}>📐 DIMENSIUNI</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Lățime (cm)</label>
+                      <NumericInput value={selected.width || 60} onChange={v => updateElement(selected.id, { width: v })} min={1} style={{ ...inputStyle, padding: '8px' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Adâncime (cm)</label>
+                      <NumericInput value={selected.depth || 60} onChange={v => updateElement(selected.id, { depth: v })} min={1} style={{ ...inputStyle, padding: '8px' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Înălțime (cm)</label>
+                      <NumericInput value={selected.height || 85} onChange={v => updateElement(selected.id, { height: v })} min={1} style={{ ...inputStyle, padding: '8px' }} />
+                    </div>
+                  </div>
+                  
+                  {/* Placement Height */}
+                  <div style={{ marginTop: '8px' }}>
+                    <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Cotă montaj (cm)</label>
+                    <NumericInput 
+                      value={selected.placementHeight || 0} 
+                      onChange={v => updateElement(selected.id, { placementHeight: v })} 
+                      min={0} 
+                      style={{ ...inputStyle, padding: '8px' }} 
+                    />
+                    <div style={{ fontSize: '9px', color: '#666', marginTop: '4px' }}>
+                      0 = pe podea
+                    </div>
+                  </div>
+                </div>
+
+                {/* Color Section */}
+                <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                  <div style={{ fontSize: '10px', color: '#888', marginBottom: '10px', fontWeight: 600 }}>🎨 CULOARE</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <input 
+                      type="color" 
+                      value={selected.color || '#4a4a4a'} 
+                      onChange={e => updateElement(selected.id, { color: e.target.value })} 
+                      style={{ 
+                        width: '40px', 
+                        height: '40px', 
+                        border: '1px solid #333', 
+                        borderRadius: '4px', 
+                        cursor: 'pointer',
+                        padding: 0,
+                        background: 'transparent'
+                      }} 
+                    />
+                    <input 
+                      type="text" 
+                      value={selected.color || '#4a4a4a'} 
+                      onChange={e => updateElement(selected.id, { color: e.target.value })} 
+                      style={{ ...inputStyle, padding: '8px', flex: 1, textTransform: 'uppercase' }} 
+                    />
+                  </div>
+                  {/* Quick color presets */}
+                  <div style={{ display: 'flex', gap: '4px', marginTop: '8px', flexWrap: 'wrap' }}>
+                    {['#2a2a2a', '#4a4a4a', '#6a6a6a', '#8a8a8a', '#f5f5f5', '#8B4513', '#D2691E', '#F5DEB3'].map(c => (
+                      <div 
+                        key={c}
+                        onClick={() => updateElement(selected.id, { color: c })}
+                        style={{ 
+                          width: '24px', 
+                          height: '24px', 
+                          background: c, 
+                          border: selected.color === c ? '2px solid #c9a962' : '1px solid #333',
+                          borderRadius: '4px',
+                          cursor: 'pointer'
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Info */}
+                <div style={{ padding: '12px', background: 'rgba(150,150,150,0.1)', borderRadius: '6px', border: '1px solid #333' }}>
+                  <div style={{ fontSize: '10px', color: '#888' }}>
+                    ℹ️ Corpurile de mobilier sunt doar pentru vizualizare și nu intră în calculul plăcilor.
+                  </div>
+                </div>
+              </div>
+            ) : (
             <div style={{ padding: '12px' }}>
               {/* Header with type badge */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -6986,6 +7316,7 @@ function Configurator({ project, onBack }) {
                 <button onClick={() => removeElement(selected.id)} style={{ ...secondaryBtnStyle, flex: 1, padding: '10px', fontSize: '11px', color: '#c96262' }}>🗑️ Șterge</button>
               </div>
             </div>
+            )
           ) : (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: '#555', fontSize: '12px' }}>
               <div style={{ fontSize: '32px', marginBottom: '12px', opacity: 0.3 }}>👆</div>
