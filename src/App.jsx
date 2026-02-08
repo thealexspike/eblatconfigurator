@@ -1919,6 +1919,12 @@ const secondaryBtnStyle = {
 // TUTORIAL STEPS (module-level constant)
 // ============================================
 
+const EXAMPLE_PROJECT_DATA = {
+  elements: [{"id": "vgdp8hvnp", "name": "Blat", "type": "island", "depth": 60, "height": 90, "length": 320, "cutouts": [{"id": "wrjubqqiv", "name": "Chiuvetă simplă", "type": "rectangle", "width": 50, "center": {"x": 0, "z": -5}, "height": 40, "preset": "sink-single", "radius": null, "cornerRadius": 1}, {"id": "k62s7jzqe", "name": "Baterie Ø32mm", "type": "circle", "width": null, "center": {"x": 0, "z": 20}, "height": null, "preset": "tap-32", "radius": 1.6, "cornerRadius": 0}, {"id": "wpo6ovw4v", "name": "Plită 70cm", "type": "rectangle", "width": 70, "center": {"x": 115, "z": 0}, "height": 49, "preset": "hob-70", "radius": null, "cornerRadius": 3}], "material": "xv8o1fe9n", "position": {"x": 2.1999999999999993, "z": 0.3}, "rotation": 0, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "placementHeight": 90}, {"id": "mik334bbh", "name": "Contrablat", "type": "backsplash", "depth": 2, "height": 60, "length": 320, "cutouts": [{"id": "2kpjlnd7m", "name": "Priză simplă", "type": "rectangle", "width": 8, "center": {"x": 84, "z": 0}, "height": 8, "preset": "outlet-single", "radius": null, "cornerRadius": 1}, {"id": "2hxerzp9q", "name": "Priză triplă", "type": "rectangle", "width": 22, "center": {"x": -79, "z": 0}, "height": 8, "preset": "outlet-triple", "radius": null, "cornerRadius": 1}], "material": "xv8o1fe9n", "position": {"x": 2.1999999999999993, "z": 0.006000000000000061}, "rotation": 0, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "placementHeight": 90}, {"id": "bl0ngiaus", "name": "Blat", "type": "island", "depth": 60, "height": 90, "length": 200, "material": "qwkzlhjni", "position": {"x": 5.400000000000001, "z": 0.3}, "rotation": 0, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "placementHeight": 90}, {"id": "tc79vm3g3", "name": "Contrablat", "type": "backsplash", "depth": 2, "height": 60, "length": 200, "material": "qwkzlhjni", "position": {"x": 5.400000000000001, "z": 0.006000000000000005}, "rotation": 0, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "placementHeight": 90}, {"id": "k3dfyn4jn", "name": "Blat", "type": "island", "depth": 90, "height": 90, "length": 140, "material": "nero-marquina", "position": {"x": 2.1999999999999993, "z": 2.125413821024247}, "rotation": 0, "thickness": 12, "waterfallLeft": true, "waterfallRight": true, "placementHeight": 90}, {"id": "jg6txn32d", "name": "Corp mobilier", "type": "cabinet", "color": "#8B4513", "depth": 60, "width": 60, "height": 90, "position": {"x": 0.9000000000000001, "z": 0.3}, "rotation": 0, "placementHeight": 0}, {"id": "huwo5oe69", "name": "Corp mobilier (copie)", "type": "cabinet", "color": "#8B4513", "depth": 60, "doors": 0, "width": 60, "height": 90, "drawers": 0, "position": {"x": 1.5000000000000002, "z": 0.3}, "rotation": 0, "placementHeight": 0}, {"id": "22xxyivsv", "name": "c6", "type": "cabinet", "color": "#8B4513", "depth": 60, "doors": 0, "width": 80, "height": 90, "drawers": 2, "position": {"x": 2.1999999999999993, "z": 0.3}, "rotation": 0, "placementHeight": 0}, {"id": "xtu1ovno4", "name": "c4", "type": "cabinet", "color": "#8B4513", "depth": 60, "doors": 0, "width": 90, "height": 90, "drawers": 2, "position": {"x": 3.3499999999999996, "z": 0.3}, "rotation": 0, "placementHeight": 0}, {"id": "2b3ayzbtw", "name": "c5", "type": "cabinet", "color": "#8B4513", "depth": 60, "width": 30, "height": 90, "position": {"x": 2.749999999999999, "z": 0.3}, "rotation": 0, "placementHeight": 0}, {"id": "5b9kvf81n", "name": "c3", "type": "cabinet", "color": "#8B4513", "depth": 60, "width": 60, "height": 250, "position": {"x": 4.100000000000001, "z": 0.3}, "rotation": 0, "placementHeight": 0}, {"id": "kvwv8e3b5", "name": "c8", "type": "cabinet", "color": "#8B4513", "depth": 60, "doors": 0, "width": 60, "height": 250, "drawers": 3, "position": {"x": 0.3, "z": 0.3}, "rotation": 90, "placementHeight": 0}, {"id": "frpu9jjzm", "name": "c7", "type": "cabinet", "color": "#8B4513", "depth": 60, "width": 60, "height": 90, "position": {"x": 0.3, "z": 0.9}, "rotation": 90, "placementHeight": 0}, {"id": "bu8s5h4x2", "name": "Corp mobilier", "type": "cabinet", "color": "#8B4513", "depth": 60, "width": 60, "height": 90, "position": {"x": 0.3, "z": 1.5}, "rotation": 90, "placementHeight": 0}, {"id": "ux50k5kf4", "name": "Corp mobilier (22", "type": "cabinet", "color": "#8B4513", "depth": 60, "width": 60, "height": 250, "position": {"x": 0.3, "z": 2.1}, "rotation": 90, "placementHeight": 0}, {"id": "wb5jszmip", "name": "C1", "type": "cabinet", "color": "#8B4513", "depth": 35, "width": 60, "height": 100, "position": {"x": 0.175, "z": 0.9}, "rotation": 90, "placementHeight": 150}, {"id": "5gkrs47eb", "name": "C2", "type": "cabinet", "color": "#8B4513", "depth": 35, "width": 60, "height": 100, "position": {"x": 0.175, "z": 1.5}, "rotation": 90, "placementHeight": 150}, {"id": "lgzm2fh4f", "name": "Blat", "type": "island", "depth": 60, "height": 90, "length": 120, "material": "xv8o1fe9n", "position": {"x": 0.3, "z": 1.2}, "rotation": 90, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "grainLengthwise": true, "placementHeight": 90}, {"id": "f9vzgpcbl", "name": "Corp mobilier (3)", "type": "cabinet", "color": "#8B4513", "depth": 60, "width": 60, "height": 90, "position": {"x": 2.5999999999999996, "z": 2.0377164497268523}, "rotation": 180, "placementHeight": 0}, {"id": "y3aay77u0", "name": "Corp mobilier (4)", "type": "cabinet", "color": "#8B4513", "depth": 60, "width": 60, "height": 90, "position": {"x": 1.799999999999999, "z": 2.0377164497268523}, "rotation": 180, "placementHeight": 0}, {"id": "mb7e9c1pq", "name": "Contrablat", "type": "backsplash", "depth": 2, "height": 60, "length": 120, "material": "xv8o1fe9n", "position": {"x": 0.006, "z": 1.2}, "rotation": 90, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "placementHeight": 90}, {"id": "dfyxukn38", "name": "Contrablat (2)", "type": "backsplash", "depth": 2, "height": 160, "length": 60, "material": "xv8o1fe9n", "position": {"x": 0.3, "z": 0.606}, "rotation": 0, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "grainLengthwise": false, "placementHeight": 90}, {"id": "ill9e8b8h", "name": "Contrablat (3)", "type": "backsplash", "depth": 2, "height": 160, "length": 60, "material": "xv8o1fe9n", "position": {"x": 0.3, "z": 1.794}, "rotation": 180, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "grainLengthwise": false, "placementHeight": 90}, {"id": "6yl6ebnlr", "name": "c4 (2)", "type": "cabinet", "color": "#8B4513", "depth": 60, "doors": 0, "width": 90, "height": 90, "drawers": 2, "position": {"x": 4.850000000000001, "z": 0.3}, "rotation": 0, "placementHeight": 0}, {"id": "v8ycl8anp", "name": "c4 (3)", "type": "cabinet", "color": "#8B4513", "depth": 60, "doors": 0, "width": 90, "height": 90, "drawers": 2, "position": {"x": 5.950000000000001, "z": 0.3}, "rotation": 0, "placementHeight": 0}, {"id": "5grpuk4jv", "name": "c5 (2)", "type": "cabinet", "color": "#8B4513", "depth": 60, "width": 20, "height": 90, "position": {"x": 5.400000000000001, "z": 0.3}, "rotation": 0, "placementHeight": 0}, {"id": "2fsk8uwca", "name": "Contrablat", "type": "backsplash", "depth": 2, "height": 45, "length": 140, "material": "nero-marquina", "position": {"x": 2.1999999999999993, "z": 2.3437164497268523}, "rotation": 0, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "placementHeight": 0}, {"id": "2djorltbn", "name": "Contrablat (4)", "type": "backsplash", "depth": 2, "height": 45, "length": 140, "material": "nero-marquina", "position": {"x": 2.1999999999999993, "z": 2.3437164497268523}, "rotation": 0, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "placementHeight": 45}, {"id": "mvhlu9u9z", "name": "Contrablat (5)", "type": "backsplash", "depth": 2, "height": 90, "length": 25, "material": "nero-marquina", "position": {"x": 1.5059999999999985, "z": 2.450413821024247}, "rotation": 90, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "grainLengthwise": false, "placementHeight": 0}, {"id": "6hy4tou0s", "name": "Contrablat (6)", "type": "backsplash", "depth": 2, "height": 90, "length": 25, "material": "nero-marquina", "position": {"x": 2.8999999999999986, "z": 2.444635697444425}, "rotation": -90, "thickness": 12, "waterfallLeft": false, "waterfallRight": false, "grainLengthwise": false, "placementHeight": 0}],
+  groups: {"0zr06dhbo": {"position": {"x": 1.0499999999999998, "z": 1.4999999999999998}, "rotation": 0}, "qob0c5dty": {"position": {"x": 2.2, "z": 0.0945212805190172}, "rotation": 0}},
+  manualLayoutPositions: {"mik334bbh_main": {"x": 0, "y": 0, "pieceH": 60, "pieceW": 320, "rotated": false, "isManual": true, "tileIndex": 0}, "vgdp8hvnp_main": {"x": 0, "y": 60, "pieceH": 60, "pieceW": 320, "rotated": false, "isManual": true, "tileIndex": 0}},
+};
+
 const TUTORIAL_STEPS = [
   {
     type: 'modal',
@@ -2743,7 +2749,34 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
           .order('updated_at', { ascending: false });
         
         if (error) throw error;
-        setProjects(data || []);
+        
+        // Dacă user-ul nu are niciun proiect, creează un proiect exemplu
+        if (!data || data.length === 0) {
+          const exampleProject = {
+            user_id: user.id,
+            name: 'Proiect exemplu',
+            description: 'Beneficiar: Ion Popescu',
+            elements: EXAMPLE_PROJECT_DATA.elements,
+            groups: EXAMPLE_PROJECT_DATA.groups,
+            manual_layout_positions: EXAMPLE_PROJECT_DATA.manualLayoutPositions,
+          };
+          
+          try {
+            const { data: newProject, error: insertError } = await supabase
+              .from('projects')
+              .insert(exampleProject)
+              .select()
+              .single();
+            
+            if (insertError) throw insertError;
+            setProjects([newProject]);
+          } catch (insertErr) {
+            console.error('Error creating example project:', insertErr);
+            setProjects([]);
+          }
+        } else {
+          setProjects(data);
+        }
       } catch (err) {
         console.error('Error loading projects:', err);
         // Fallback to localStorage
@@ -3943,12 +3976,11 @@ function Configurator({ project, onBack }) {
     };
   }, []);
 
-  // Tutorial: Auto-start on first use (0 elements + never completed)
+  // Tutorial: Auto-start when opening an empty project (never completed before)
   useEffect(() => {
     if (elements.length === 0 && tutorialStep === null) {
       const key = `eblat_tutorial_completed_${user?.id || 'local'}`;
       if (!localStorage.getItem(key)) {
-        // Small delay to let the UI render first
         const timer = setTimeout(() => setTutorialStep(0), 600);
         return () => clearTimeout(timer);
       }
@@ -4415,13 +4447,14 @@ function Configurator({ project, onBack }) {
             
             const memberY = (member.placementHeight || 0) / 100;
             
-            // Member's 5 snap points
+            // Member's snap points: 4 corners + edge centers
             const memberPoints = [
               { x: memberWorldX - memberW / 2, z: memberWorldZ - memberD / 2 },
               { x: memberWorldX + memberW / 2, z: memberWorldZ - memberD / 2 },
               { x: memberWorldX - memberW / 2, z: memberWorldZ + memberD / 2 },
               { x: memberWorldX + memberW / 2, z: memberWorldZ + memberD / 2 },
-              { x: memberWorldX, z: memberWorldZ - memberD / 2 }, // Front-center
+              { x: memberWorldX, z: memberWorldZ - memberD / 2 },
+              { x: memberWorldX, z: memberWorldZ + memberD / 2 },
             ];
             
             elements.forEach(other => {
@@ -4438,13 +4471,14 @@ function Configurator({ project, onBack }) {
               const heightDiff = Math.abs(memberY - otherY);
               const snapType = heightDiff > 0.01 ? 'warning' : 'element';
               
-              // Other's 5 snap points
+              // Other's snap points: 4 corners + edge centers
               const otherPoints = [
                 { x: otherPos.x - otherW / 2, z: otherPos.z - otherD / 2 },
                 { x: otherPos.x + otherW / 2, z: otherPos.z - otherD / 2 },
                 { x: otherPos.x - otherW / 2, z: otherPos.z + otherD / 2 },
                 { x: otherPos.x + otherW / 2, z: otherPos.z + otherD / 2 },
                 { x: otherPos.x, z: otherPos.z - otherD / 2 },
+                { x: otherPos.x, z: otherPos.z + otherD / 2 },
               ];
               
               memberPoints.forEach(mp => {
@@ -4539,14 +4573,16 @@ function Configurator({ project, onBack }) {
             }
             if (isRotated90) [movingWidth, movingDepth] = [movingDepth, movingWidth];
             
-            // Moving element's 5 snap points: 4 corners + center front
-            const movingY = (el.placementHeight || 0) / 100; // Height of moving element
+            // Moving element's snap points: 4 corners + edge centers
+            // For backsplash, use front/back edges only (no center on thickness axis)
+            const movingY = (el.placementHeight || 0) / 100;
             const movingPoints = [
-              { x: newX - movingWidth / 2, z: newZ - movingDepth / 2, name: 'FL' }, // Front-Left
-              { x: newX + movingWidth / 2, z: newZ - movingDepth / 2, name: 'FR' }, // Front-Right
-              { x: newX - movingWidth / 2, z: newZ + movingDepth / 2, name: 'BL' }, // Back-Left
-              { x: newX + movingWidth / 2, z: newZ + movingDepth / 2, name: 'BR' }, // Back-Right
-              { x: newX, z: newZ - movingDepth / 2, name: 'FC' }, // Front-Center
+              { x: newX - movingWidth / 2, z: newZ - movingDepth / 2, name: 'FL' },
+              { x: newX + movingWidth / 2, z: newZ - movingDepth / 2, name: 'FR' },
+              { x: newX - movingWidth / 2, z: newZ + movingDepth / 2, name: 'BL' },
+              { x: newX + movingWidth / 2, z: newZ + movingDepth / 2, name: 'BR' },
+              { x: newX, z: newZ - movingDepth / 2, name: 'FC' },
+              { x: newX, z: newZ + movingDepth / 2, name: 'BC' },
             ];
             
             let snapX = null, snapZ = null;
@@ -4585,7 +4621,7 @@ function Configurator({ project, onBack }) {
                 }
                 if (otherIsRotated90) [otherWidth, otherDepth] = [otherDepth, otherWidth];
                 
-                // Other element's 5 snap points
+                // Other element's snap points: 4 corners + edge centers
                 const otherY = (other.placementHeight || 0) / 100;
                 const otherPoints = [
                   { x: otherPos.x - otherWidth / 2, z: otherPos.z - otherDepth / 2, name: 'FL' },
@@ -4593,6 +4629,7 @@ function Configurator({ project, onBack }) {
                   { x: otherPos.x - otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BL' },
                   { x: otherPos.x + otherWidth / 2, z: otherPos.z + otherDepth / 2, name: 'BR' },
                   { x: otherPos.x, z: otherPos.z - otherDepth / 2, name: 'FC' },
+                  { x: otherPos.x, z: otherPos.z + otherDepth / 2, name: 'BC' },
                 ];
                 
                 // Determine snap type based on height difference
@@ -5382,12 +5419,16 @@ function Configurator({ project, onBack }) {
     const handleWheel = (e) => {
       e.preventDefault();
       
+      // Zoom proportional cu distanța — pași mici zoomed in, pași mari zoomed out
+      const zoomFactor = orbitRef.current.radius * 0.08;
+      
       // Detect if this is likely a touchpad (has both deltaX and deltaY, or ctrlKey for pinch)
       const isTouchpad = Math.abs(e.deltaX) > 0 || e.ctrlKey;
       
       if (e.ctrlKey) {
         // Pinch to zoom on touchpad (ctrlKey is set during pinch gesture)
-        orbitRef.current.radius = Math.max(2, Math.min(20, orbitRef.current.radius + e.deltaY * 0.02));
+        const delta = e.deltaY > 0 ? 1 : -1;
+        orbitRef.current.radius = Math.max(1, Math.min(25, orbitRef.current.radius + delta * zoomFactor * 0.3));
         updateCamera();
         tutorialMarkAction('zoomed-camera');
       } else if (isTouchpad && Math.abs(e.deltaX) > 0) {
@@ -5408,8 +5449,9 @@ function Configurator({ project, onBack }) {
         orbitRef.current.target.z -= (e.deltaX * rightZ + e.deltaY * forwardZ) * panSpeed;
         updateCamera();
       } else {
-        // Regular mouse wheel - zoom
-        orbitRef.current.radius = Math.max(2, Math.min(20, orbitRef.current.radius + e.deltaY * 0.01));
+        // Regular mouse wheel - zoom proportional
+        const delta = e.deltaY > 0 ? 1 : -1;
+        orbitRef.current.radius = Math.max(1, Math.min(25, orbitRef.current.radius + delta * zoomFactor));
         updateCamera();
         tutorialMarkAction('zoomed-camera');
       }

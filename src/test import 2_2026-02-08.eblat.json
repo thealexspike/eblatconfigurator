@@ -1,0 +1,623 @@
+{
+  "version": "1.0",
+  "exportedAt": "2026-02-08T13:23:05.229Z",
+  "projectName": "test import 2",
+  "elements": [
+    {
+      "id": "vgdp8hvnp",
+      "name": "Blat",
+      "type": "island",
+      "depth": 60,
+      "height": 90,
+      "length": 320,
+      "cutouts": [
+        {
+          "id": "wrjubqqiv",
+          "name": "Chiuvetă simplă",
+          "type": "rectangle",
+          "width": 50,
+          "center": {
+            "x": 0,
+            "z": -5
+          },
+          "height": 40,
+          "preset": "sink-single",
+          "radius": null,
+          "cornerRadius": 1
+        },
+        {
+          "id": "k62s7jzqe",
+          "name": "Baterie Ø32mm",
+          "type": "circle",
+          "width": null,
+          "center": {
+            "x": 0,
+            "z": 20
+          },
+          "height": null,
+          "preset": "tap-32",
+          "radius": 1.6,
+          "cornerRadius": 0
+        },
+        {
+          "id": "wpo6ovw4v",
+          "name": "Plită 70cm",
+          "type": "rectangle",
+          "width": 70,
+          "center": {
+            "x": 115,
+            "z": 0
+          },
+          "height": 49,
+          "preset": "hob-70",
+          "radius": null,
+          "cornerRadius": 3
+        }
+      ],
+      "material": "xv8o1fe9n",
+      "position": {
+        "x": 2.1999999999999993,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "placementHeight": 90
+    },
+    {
+      "id": "mik334bbh",
+      "name": "Contrablat",
+      "type": "backsplash",
+      "depth": 2,
+      "height": 60,
+      "length": 320,
+      "cutouts": [
+        {
+          "id": "2kpjlnd7m",
+          "name": "Priză simplă",
+          "type": "rectangle",
+          "width": 8,
+          "center": {
+            "x": 84,
+            "z": 0
+          },
+          "height": 8,
+          "preset": "outlet-single",
+          "radius": null,
+          "cornerRadius": 1
+        },
+        {
+          "id": "2hxerzp9q",
+          "name": "Priză triplă",
+          "type": "rectangle",
+          "width": 22,
+          "center": {
+            "x": -79,
+            "z": 0
+          },
+          "height": 8,
+          "preset": "outlet-triple",
+          "radius": null,
+          "cornerRadius": 1
+        }
+      ],
+      "material": "xv8o1fe9n",
+      "position": {
+        "x": 2.1999999999999993,
+        "z": 0.006000000000000061
+      },
+      "rotation": 0,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "placementHeight": 90
+    },
+    {
+      "id": "bl0ngiaus",
+      "name": "Blat",
+      "type": "island",
+      "depth": 60,
+      "height": 90,
+      "length": 200,
+      "material": "qwkzlhjni",
+      "position": {
+        "x": 5.400000000000001,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "placementHeight": 90
+    },
+    {
+      "id": "tc79vm3g3",
+      "name": "Contrablat",
+      "type": "backsplash",
+      "depth": 2,
+      "height": 60,
+      "length": 200,
+      "material": "qwkzlhjni",
+      "position": {
+        "x": 5.400000000000001,
+        "z": 0.006000000000000005
+      },
+      "rotation": 0,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "placementHeight": 90
+    },
+    {
+      "id": "k3dfyn4jn",
+      "name": "Blat",
+      "type": "island",
+      "depth": 90,
+      "height": 90,
+      "length": 140,
+      "material": "nero-marquina",
+      "position": {
+        "x": 2.1999999999999993,
+        "z": 2.125413821024247
+      },
+      "rotation": 0,
+      "thickness": 12,
+      "waterfallLeft": true,
+      "waterfallRight": true,
+      "placementHeight": 90
+    },
+    {
+      "id": "jg6txn32d",
+      "name": "Corp mobilier",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "width": 60,
+      "height": 90,
+      "position": {
+        "x": 0.9000000000000001,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "placementHeight": 0
+    },
+    {
+      "id": "huwo5oe69",
+      "name": "Corp mobilier (copie)",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "doors": 0,
+      "width": 60,
+      "height": 90,
+      "drawers": 0,
+      "position": {
+        "x": 1.5000000000000002,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "placementHeight": 0
+    },
+    {
+      "id": "22xxyivsv",
+      "name": "c6",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "doors": 0,
+      "width": 80,
+      "height": 90,
+      "drawers": 2,
+      "position": {
+        "x": 2.1999999999999993,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "placementHeight": 0
+    },
+    {
+      "id": "xtu1ovno4",
+      "name": "c4",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "doors": 0,
+      "width": 90,
+      "height": 90,
+      "drawers": 2,
+      "position": {
+        "x": 3.3499999999999996,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "placementHeight": 0
+    },
+    {
+      "id": "2b3ayzbtw",
+      "name": "c5",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "width": 30,
+      "height": 90,
+      "position": {
+        "x": 2.749999999999999,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "placementHeight": 0
+    },
+    {
+      "id": "5b9kvf81n",
+      "name": "c3",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "width": 60,
+      "height": 250,
+      "position": {
+        "x": 4.100000000000001,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "placementHeight": 0
+    },
+    {
+      "id": "kvwv8e3b5",
+      "name": "c8",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "doors": 0,
+      "width": 60,
+      "height": 250,
+      "drawers": 3,
+      "position": {
+        "x": 0.3,
+        "z": 0.3
+      },
+      "rotation": 90,
+      "placementHeight": 0
+    },
+    {
+      "id": "frpu9jjzm",
+      "name": "c7",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "width": 60,
+      "height": 90,
+      "position": {
+        "x": 0.3,
+        "z": 0.9
+      },
+      "rotation": 90,
+      "placementHeight": 0
+    },
+    {
+      "id": "bu8s5h4x2",
+      "name": "Corp mobilier",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "width": 60,
+      "height": 90,
+      "position": {
+        "x": 0.3,
+        "z": 1.5
+      },
+      "rotation": 90,
+      "placementHeight": 0
+    },
+    {
+      "id": "ux50k5kf4",
+      "name": "Corp mobilier (22",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "width": 60,
+      "height": 250,
+      "position": {
+        "x": 0.3,
+        "z": 2.1
+      },
+      "rotation": 90,
+      "placementHeight": 0
+    },
+    {
+      "id": "wb5jszmip",
+      "name": "C1",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 35,
+      "width": 60,
+      "height": 100,
+      "position": {
+        "x": 0.175,
+        "z": 0.9
+      },
+      "rotation": 90,
+      "placementHeight": 150
+    },
+    {
+      "id": "5gkrs47eb",
+      "name": "C2",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 35,
+      "width": 60,
+      "height": 100,
+      "position": {
+        "x": 0.175,
+        "z": 1.5
+      },
+      "rotation": 90,
+      "placementHeight": 150
+    },
+    {
+      "id": "lgzm2fh4f",
+      "name": "Blat",
+      "type": "island",
+      "depth": 60,
+      "height": 90,
+      "length": 120,
+      "material": "xv8o1fe9n",
+      "position": {
+        "x": 0.3,
+        "z": 1.2
+      },
+      "rotation": 90,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "grainLengthwise": true,
+      "placementHeight": 90
+    },
+    {
+      "id": "f9vzgpcbl",
+      "name": "Corp mobilier (3)",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "width": 60,
+      "height": 90,
+      "position": {
+        "x": 2.5999999999999996,
+        "z": 2.0377164497268523
+      },
+      "rotation": 180,
+      "placementHeight": 0
+    },
+    {
+      "id": "y3aay77u0",
+      "name": "Corp mobilier (4)",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "width": 60,
+      "height": 90,
+      "position": {
+        "x": 1.799999999999999,
+        "z": 2.0377164497268523
+      },
+      "rotation": 180,
+      "placementHeight": 0
+    },
+    {
+      "id": "mb7e9c1pq",
+      "name": "Contrablat",
+      "type": "backsplash",
+      "depth": 2,
+      "height": 60,
+      "length": 120,
+      "material": "xv8o1fe9n",
+      "position": {
+        "x": 0.006,
+        "z": 1.2
+      },
+      "rotation": 90,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "placementHeight": 90
+    },
+    {
+      "id": "dfyxukn38",
+      "name": "Contrablat (2)",
+      "type": "backsplash",
+      "depth": 2,
+      "height": 160,
+      "length": 60,
+      "material": "xv8o1fe9n",
+      "position": {
+        "x": 0.3,
+        "z": 0.606
+      },
+      "rotation": 0,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "grainLengthwise": false,
+      "placementHeight": 90
+    },
+    {
+      "id": "ill9e8b8h",
+      "name": "Contrablat (3)",
+      "type": "backsplash",
+      "depth": 2,
+      "height": 160,
+      "length": 60,
+      "material": "xv8o1fe9n",
+      "position": {
+        "x": 0.3,
+        "z": 1.794
+      },
+      "rotation": 180,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "grainLengthwise": false,
+      "placementHeight": 90
+    },
+    {
+      "id": "6yl6ebnlr",
+      "name": "c4 (2)",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "doors": 0,
+      "width": 90,
+      "height": 90,
+      "drawers": 2,
+      "position": {
+        "x": 4.850000000000001,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "placementHeight": 0
+    },
+    {
+      "id": "v8ycl8anp",
+      "name": "c4 (3)",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "doors": 0,
+      "width": 90,
+      "height": 90,
+      "drawers": 2,
+      "position": {
+        "x": 5.950000000000001,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "placementHeight": 0
+    },
+    {
+      "id": "5grpuk4jv",
+      "name": "c5 (2)",
+      "type": "cabinet",
+      "color": "#8B4513",
+      "depth": 60,
+      "width": 20,
+      "height": 90,
+      "position": {
+        "x": 5.400000000000001,
+        "z": 0.3
+      },
+      "rotation": 0,
+      "placementHeight": 0
+    },
+    {
+      "id": "2fsk8uwca",
+      "name": "Contrablat",
+      "type": "backsplash",
+      "depth": 2,
+      "height": 45,
+      "length": 140,
+      "material": "nero-marquina",
+      "position": {
+        "x": 2.1999999999999993,
+        "z": 2.3437164497268523
+      },
+      "rotation": 0,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "placementHeight": 0
+    },
+    {
+      "id": "2djorltbn",
+      "name": "Contrablat (4)",
+      "type": "backsplash",
+      "depth": 2,
+      "height": 45,
+      "length": 140,
+      "material": "nero-marquina",
+      "position": {
+        "x": 2.1999999999999993,
+        "z": 2.3437164497268523
+      },
+      "rotation": 0,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "placementHeight": 45
+    },
+    {
+      "id": "mvhlu9u9z",
+      "name": "Contrablat (5)",
+      "type": "backsplash",
+      "depth": 2,
+      "height": 90,
+      "length": 25,
+      "material": "nero-marquina",
+      "position": {
+        "x": 1.5059999999999985,
+        "z": 2.450413821024247
+      },
+      "rotation": 90,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "grainLengthwise": false,
+      "placementHeight": 0
+    },
+    {
+      "id": "6hy4tou0s",
+      "name": "Contrablat (6)",
+      "type": "backsplash",
+      "depth": 2,
+      "height": 90,
+      "length": 25,
+      "material": "nero-marquina",
+      "position": {
+        "x": 2.8999999999999986,
+        "z": 2.444635697444425
+      },
+      "rotation": -90,
+      "thickness": 12,
+      "waterfallLeft": false,
+      "waterfallRight": false,
+      "grainLengthwise": false,
+      "placementHeight": 0
+    }
+  ],
+  "groups": {
+    "0zr06dhbo": {
+      "position": {
+        "x": 1.0499999999999998,
+        "z": 1.4999999999999998
+      },
+      "rotation": 0
+    },
+    "qob0c5dty": {
+      "position": {
+        "x": 2.2,
+        "z": 0.0945212805190172
+      },
+      "rotation": 0
+    }
+  },
+  "manualLayoutPositions": {
+    "mik334bbh_main": {
+      "x": 0,
+      "y": 0,
+      "pieceH": 60,
+      "pieceW": 320,
+      "rotated": false,
+      "isManual": true,
+      "tileIndex": 0
+    },
+    "vgdp8hvnp_main": {
+      "x": 0,
+      "y": 60,
+      "pieceH": 60,
+      "pieceW": 320,
+      "rotated": false,
+      "isManual": true,
+      "tileIndex": 0
+    }
+  }
+}
