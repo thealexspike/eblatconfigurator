@@ -228,12 +228,79 @@ function validateCutout(cutout, pieceLength, pieceDepth, allCutouts) {
   // ERRORS: Invalid dimensions
   if (cutout.type === 'circle') {
     if (!cutout.radius || cutout.radius < 0.5) errors.push('Raza minimă este 0.5cm');
+    if (cutout.radius > 80) errors.push('Raza maximă este 80cm');
   } else {
     if (!cutout.width || cutout.width < 1) errors.push('Lățimea minimă este 1cm');
-    if (!cutout.height || cutout.height < 1) errors.push('Lungimea minimă este 1cm');
+    if (!cutout.height || cutout.height < 1) errors.push('Adâncimea minimă este 1cm');
+    if (cutout.width > 320) errors.push('Lățimea maximă este 320cm');
+    if (cutout.height > 160) errors.push('Adâncimea maximă este 160cm');
+    if (cutout.cornerRadius > 30) errors.push('Raza de rotunjire maximă este 30cm');
   }
   
   return { valid: errors.length === 0, errors, warnings, edges };
+}
+
+// Convert induction system to cutout-like object for overlap checking
+function inductionToCutoutLike(sys) {
+  return {
+    id: sys.id,
+    name: sys.name,
+    type: sys.type,
+    center: { x: sys.centerX || 0, z: sys.centerZ || 0 },
+    width: sys.width || null,
+    height: sys.height || null,
+    radius: sys.radius || null,
+    cornerRadius: 0,
+  };
+}
+
+// Validate an induction system against piece dimensions, other induction systems, and cutouts
+function validateInduction(sys, pieceLength, pieceDepth, allInductions, allCutouts, preset) {
+  const errors = [];
+  const warnings = [];
+  const minFront = preset?.minFront || 3;
+  const minBack = preset?.minBack || 3;
+  const MIN_BETWEEN = 3; // cm between induction systems
+
+  // Convert to cutout-like for overlap checks
+  const sysLike = inductionToCutoutLike(sys);
+  const edges = getCutoutEdgeDistances(sysLike, pieceLength, pieceDepth);
+
+  // ERRORS: Outside piece
+  if (edges.stanga < 0) errors.push('Sistemul iese din marginea stângă');
+  if (edges.dreapta < 0) errors.push('Sistemul iese din marginea dreaptă');
+  if (edges.fata < 0) errors.push('Sistemul iese din marginea din față');
+  if (edges.spate < 0) errors.push('Sistemul iese din marginea din spate');
+
+  // WARNINGS: Too close to edge (using preset min margins)
+  if (edges.fata >= 0 && edges.fata < minFront)
+    warnings.push(`Distanță ${edges.fata.toFixed(1)}cm de față (min: ${minFront}cm)`);
+  if (edges.spate >= 0 && edges.spate < minBack)
+    warnings.push(`Distanță ${edges.spate.toFixed(1)}cm de spate (min: ${minBack}cm)`);
+
+  // Check overlap with other induction systems
+  allInductions.forEach(other => {
+    if (other.id === sys.id) return;
+    const otherLike = inductionToCutoutLike(other);
+    const overlap = checkCutoutsOverlap(sysLike, otherLike);
+    if (overlap.overlaps) {
+      errors.push(`Suprapunere cu "${other.name}"`);
+    } else if (overlap.distance < MIN_BETWEEN) {
+      warnings.push(`Distanță ${overlap.distance.toFixed(1)}cm de "${other.name}" (min: ${MIN_BETWEEN}cm)`);
+    }
+  });
+
+  // Check overlap with cutouts
+  (allCutouts || []).forEach(cutout => {
+    const overlap = checkCutoutsOverlap(sysLike, cutout);
+    if (overlap.overlaps) {
+      errors.push(`Suprapunere cu decupajul "${cutout.name}"`);
+    } else if (overlap.distance < MIN_BETWEEN) {
+      warnings.push(`Distanță ${overlap.distance.toFixed(1)}cm de decupajul "${cutout.name}" (min: ${MIN_BETWEEN}cm)`);
+    }
+  });
+
+  return { valid: errors.length === 0, errors, warnings };
 }
 
 // Create a new cutout from preset, positioned at piece center
@@ -2355,6 +2422,14 @@ const DEFAULT_LIBRARY = {
     { id: 'f11', colorId: 'silestone-white', thickness: 20, length: 320, width: 159 },
     { id: 'f12', colorId: 'silestone-white', thickness: 30, length: 320, width: 159 },
   ],
+  inductionSystems: [
+    { id: 'ind-hob-60', name: 'Plită inductie 60cm', type: 'rectangle', width: 56, height: 49, depth: 50, minFront: 5, minBack: 5, icon: '🔥' },
+    { id: 'ind-hob-70', name: 'Plită inductie 70cm', type: 'rectangle', width: 65, height: 49, depth: 50, minFront: 5, minBack: 5, icon: '🔥' },
+    { id: 'ind-hob-80', name: 'Plită inductie 80cm', type: 'rectangle', width: 75, height: 49, depth: 50, minFront: 5, minBack: 5, icon: '🔥' },
+    { id: 'ind-hob-90', name: 'Plită inductie 90cm', type: 'rectangle', width: 85, height: 49, depth: 50, minFront: 5, minBack: 5, icon: '🔥' },
+    { id: 'ind-eye', name: 'Ochi inductie electrocasnic', type: 'circle', radius: 11, depth: 30, minFront: 3, minBack: 3, icon: '⭕' },
+    { id: 'ind-charger', name: 'Punct încărcare telefon', type: 'circle', radius: 5, depth: 15, minFront: 3, minBack: 3, icon: '📱' },
+  ],
 };
 
 // ============================================
@@ -2734,6 +2809,9 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [duplicateConfirm, setDuplicateConfirm] = useState(null);
+  const duplicateTimestamps = useRef([]); // anti-spam: track last copy times
+  const exampleCreatedRef = useRef(false);
 
   // Load projects from Supabase
   useEffect(() => {
@@ -2750,8 +2828,9 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
         
         if (error) throw error;
         
-        // Dacă user-ul nu are niciun proiect, creează un proiect exemplu
-        if (!data || data.length === 0) {
+        // Dacă user-ul nu are niciun proiect și nu am creat deja exemplul
+        if ((!data || data.length === 0) && !exampleCreatedRef.current) {
+          exampleCreatedRef.current = true;
           const exampleProject = {
             user_id: user.id,
             name: 'Proiect exemplu',
@@ -2790,6 +2869,10 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
 
   const createProject = async () => {
     if (!newProjectName.trim()) return;
+    if (projects.length >= 30) {
+      alert('Limită atinsă: maxim 30 de proiecte.');
+      return;
+    }
     
     const project = {
       user_id: user.id,
@@ -2844,6 +2927,23 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
   };
 
   const duplicateProject = async (project) => {
+    // Verificări
+    if (projects.length >= 30) {
+      alert('Limită atinsă: maxim 30 de proiecte.');
+      setDuplicateConfirm(null);
+      return;
+    }
+    
+    // Rate limiting: max 5 copii pe minut
+    const now = Date.now();
+    duplicateTimestamps.current = duplicateTimestamps.current.filter(t => now - t < 60000);
+    if (duplicateTimestamps.current.length >= 5) {
+      alert('Prea multe copieri. Așteaptă un minut.');
+      setDuplicateConfirm(null);
+      return;
+    }
+    duplicateTimestamps.current.push(now);
+    
     const duplicate = {
       user_id: user.id,
       name: `${project.name} (copie)`,
@@ -2862,7 +2962,6 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
       setProjects([data, ...projects]);
     } catch (err) {
       console.error('Error duplicating project:', err);
-      // Fallback
       const localDuplicate = {
         ...duplicate,
         id: Date.now().toString(),
@@ -2871,6 +2970,7 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
       };
       setProjects([localDuplicate, ...projects]);
     }
+    setDuplicateConfirm(null);
   };
 
   return (
@@ -2942,6 +3042,26 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
           </div>
         )}
 
+        {/* Duplicate Confirm Modal */}
+        {duplicateConfirm && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1001 }}>
+            <div style={{ background: '#111', padding: '24px', borderRadius: '12px', maxWidth: '400px', border: '1px solid #333', textAlign: 'center' }}>
+              <div style={{ fontSize: '40px', marginBottom: '16px' }}>📋</div>
+              <h3 style={{ margin: '0 0 12px', color: '#fff' }}>Copiezi proiectul?</h3>
+              <p style={{ color: '#888', marginBottom: '8px', fontSize: '14px' }}>
+                <strong style={{ color: '#c9a962' }}>{duplicateConfirm.name}</strong>
+              </p>
+              <p style={{ color: '#555', marginBottom: '24px', fontSize: '12px' }}>
+                Se va crea o copie cu toate elementele.
+              </p>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                <button onClick={() => setDuplicateConfirm(null)} style={secondaryBtnStyle}>Anulează</button>
+                <button onClick={() => duplicateProject(duplicateConfirm)} style={buttonStyle}>Copiază</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Projects Grid */}
         {projects.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '80px 20px', background: '#111', borderRadius: '12px', border: '1px dashed #2a2a2a' }}>
@@ -2969,7 +3089,7 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
                   <div style={{ fontSize: '11px', color: '#555' }}>{new Date(project.updated_at || project.updatedAt).toLocaleDateString('ro-RO')}</div>
                   <div style={{ display: 'flex', gap: '8px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #2a2a2a' }}>
                     <button onClick={() => onSelectProject(project)} style={{ ...buttonStyle, flex: 1, padding: '8px', fontSize: '12px' }}>Deschide</button>
-                    <button onClick={() => duplicateProject(project)} style={{ ...secondaryBtnStyle, padding: '8px', fontSize: '12px' }}>📋</button>
+                    <button onClick={() => setDuplicateConfirm(project)} style={{ ...secondaryBtnStyle, padding: '8px', fontSize: '12px' }}>📋</button>
                     <button onClick={() => setDeleteConfirm(project)} style={{ ...secondaryBtnStyle, padding: '8px', fontSize: '12px', color: '#c96262' }}>🗑️</button>
                   </div>
                 </div>
@@ -3024,6 +3144,7 @@ function MaterialLibrary({ onClose }) {
             manufacturers: data.manufacturers || DEFAULT_LIBRARY.manufacturers,
             colors: data.colors || DEFAULT_LIBRARY.colors,
             formats: data.formats || DEFAULT_LIBRARY.formats,
+            inductionSystems: data.induction_systems || DEFAULT_LIBRARY.inductionSystems,
           };
           setLibrary(loadedLibrary);
           // Also save to localStorage as cache
@@ -3060,6 +3181,7 @@ function MaterialLibrary({ onClose }) {
             manufacturers: lib.manufacturers,
             colors: lib.colors,
             formats: lib.formats,
+            induction_systems: lib.inductionSystems,
             updated_at: new Date().toISOString(),
           })
           .eq('id', 'main');
@@ -3197,6 +3319,7 @@ function MaterialLibrary({ onClose }) {
   const tabs = [
     { id: 'materialTypes', label: 'Tipuri Material' },
     { id: 'catalog', label: 'Catalog Complet' },
+    { id: 'inductionSystems', label: 'Sisteme Inductie' },
     { id: 'archive', label: 'Arhivă' },
   ];
 
@@ -3239,6 +3362,114 @@ function MaterialLibrary({ onClose }) {
         </div>
       ))}
       <button onClick={() => { setNewItem({}); setShowAddModal(true); }} style={{ ...secondaryBtnStyle, padding: '12px', borderStyle: 'dashed', marginTop: '8px' }}>+ Adaugă Tip Material</button>
+    </div>
+  );
+
+  // Render Induction Systems Tab
+  const [editingInduction, setEditingInduction] = useState(null);
+  const [newInduction, setNewInduction] = useState(null);
+  
+  const saveInductionItem = (item) => {
+    const systems = library.inductionSystems || [];
+    if (editingInduction) {
+      updateLibrary('inductionSystems', systems.map(s => s.id === item.id ? item : s));
+      setEditingInduction(null);
+    } else {
+      updateLibrary('inductionSystems', [...systems, { ...item, id: Math.random().toString(36).substr(2, 9) }]);
+      setNewInduction(null);
+    }
+  };
+  
+  const deleteInductionItem = (id) => {
+    updateLibrary('inductionSystems', (library.inductionSystems || []).filter(s => s.id !== id));
+  };
+
+  const renderInductionForm = (item, onSave, onCancel) => (
+    <div style={{ padding: '16px', background: '#1a1a1a', borderRadius: '8px', border: '1px solid #c9a962', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+        <div>
+          <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '2px' }}>Nume</label>
+          <input value={item.name || ''} onChange={e => onSave === saveInductionItem ? (editingInduction ? setEditingInduction({ ...item, name: e.target.value }) : setNewInduction({ ...item, name: e.target.value })) : null} style={{ ...inputStyle, padding: '6px' }} />
+        </div>
+        <div>
+          <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '2px' }}>Formă</label>
+          <select value={item.type || 'rectangle'} onChange={e => editingInduction ? setEditingInduction({ ...item, type: e.target.value }) : setNewInduction({ ...item, type: e.target.value })} style={{ ...inputStyle, padding: '6px' }}>
+            <option value="rectangle">Dreptunghi</option>
+            <option value="circle">Cerc</option>
+          </select>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+        {item.type === 'circle' ? (
+          <div>
+            <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '2px' }}>Rază (cm)</label>
+            <input type="number" value={item.radius || 0} onChange={e => editingInduction ? setEditingInduction({ ...item, radius: +e.target.value }) : setNewInduction({ ...item, radius: +e.target.value })} style={{ ...inputStyle, padding: '6px' }} />
+          </div>
+        ) : (<>
+          <div>
+            <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '2px' }}>Lățime (cm)</label>
+            <input type="number" value={item.width || 0} onChange={e => editingInduction ? setEditingInduction({ ...item, width: +e.target.value }) : setNewInduction({ ...item, width: +e.target.value })} style={{ ...inputStyle, padding: '6px' }} />
+          </div>
+          <div>
+            <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '2px' }}>Adâncime (cm)</label>
+            <input type="number" value={item.height || 0} onChange={e => editingInduction ? setEditingInduction({ ...item, height: +e.target.value }) : setNewInduction({ ...item, height: +e.target.value })} style={{ ...inputStyle, padding: '6px' }} />
+          </div>
+        </>)}
+        <div>
+          <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '2px' }}>Extrudare (mm)</label>
+          <input type="number" value={item.depth || 0} onChange={e => editingInduction ? setEditingInduction({ ...item, depth: +e.target.value }) : setNewInduction({ ...item, depth: +e.target.value })} style={{ ...inputStyle, padding: '6px' }} />
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+        <div>
+          <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '2px' }}>Min față (cm)</label>
+          <input type="number" value={item.minFront || 0} onChange={e => editingInduction ? setEditingInduction({ ...item, minFront: +e.target.value }) : setNewInduction({ ...item, minFront: +e.target.value })} style={{ ...inputStyle, padding: '6px' }} />
+        </div>
+        <div>
+          <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '2px' }}>Min spate (cm)</label>
+          <input type="number" value={item.minBack || 0} onChange={e => editingInduction ? setEditingInduction({ ...item, minBack: +e.target.value }) : setNewInduction({ ...item, minBack: +e.target.value })} style={{ ...inputStyle, padding: '6px' }} />
+        </div>
+        <div>
+          <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '2px' }}>Icon</label>
+          <input value={item.icon || ''} onChange={e => editingInduction ? setEditingInduction({ ...item, icon: e.target.value }) : setNewInduction({ ...item, icon: e.target.value })} style={{ ...inputStyle, padding: '6px' }} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+        <button onClick={onCancel} style={secondaryBtnStyle}>Anulează</button>
+        <button onClick={() => onSave(item)} style={buttonStyle}>Salvează</button>
+      </div>
+    </div>
+  );
+
+  const renderInductionSystems = () => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>
+        Definește preset-urile de sisteme inductie wireless disponibile pentru blaturi. Acestea se montează sub blat (extrudare din fund).
+      </div>
+      {(library.inductionSystems || []).map(sys => (
+        editingInduction?.id === sys.id ? (
+          renderInductionForm(editingInduction, saveInductionItem, () => setEditingInduction(null))
+        ) : (
+          <div key={sys.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px', background: '#1a1a1a', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+            <div style={{ fontSize: '20px', width: '32px', textAlign: 'center' }}>{sys.icon || '⚡'}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 500, fontSize: '13px' }}>{sys.name}</div>
+              <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
+                {sys.type === 'circle' ? `Ø${(sys.radius || 0) * 2}cm` : `${sys.width}×${sys.height}cm`}
+                {' · '}{sys.depth}mm extrudare
+                {' · '}min față {sys.minFront}cm / spate {sys.minBack}cm
+              </div>
+            </div>
+            <button onClick={() => setEditingInduction({ ...sys })} style={{ ...secondaryBtnStyle, padding: '6px 12px', fontSize: '12px' }}>Editează</button>
+            <button onClick={() => deleteInductionItem(sys.id)} style={{ ...secondaryBtnStyle, padding: '6px 12px', fontSize: '12px', color: '#c96262' }}>×</button>
+          </div>
+        )
+      ))}
+      {newInduction ? (
+        renderInductionForm(newInduction, saveInductionItem, () => setNewInduction(null))
+      ) : (
+        <button onClick={() => setNewInduction({ name: '', type: 'rectangle', width: 56, height: 49, depth: 50, minFront: 5, minBack: 5, icon: '⚡' })} style={{ ...secondaryBtnStyle, padding: '12px', borderStyle: 'dashed', marginTop: '8px' }}>+ Adaugă Sistem Inductie</button>
+      )}
     </div>
   );
 
@@ -3811,6 +4042,7 @@ function MaterialLibrary({ onClose }) {
       <div style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
         {activeTab === 'materialTypes' && renderMaterialTypes()}
         {activeTab === 'catalog' && renderCatalog()}
+        {activeTab === 'inductionSystems' && renderInductionSystems()}
         {activeTab === 'archive' && renderArchive()}
       </div>
 
@@ -3944,6 +4176,7 @@ function Configurator({ project, onBack }) {
   const [manualLayoutPositions, setManualLayoutPositions] = useState(project?.manual_layout_positions || {}); // Manual piece positions from footer drag
   const [forceRenderKey, setForceRenderKey] = useState(0); // Force re-render of all meshes
   const [selectedCutoutId, setSelectedCutoutId] = useState(null); // Selected cutout for highlighting
+  const [selectedInductionId, setSelectedInductionId] = useState(null); // Selected induction system
   const [editingCutoutNameId, setEditingCutoutNameId] = useState(null); // Cutout being renamed
   const [tutorialStep, setTutorialStep] = useState(null); // null = off, 0-8 = active step
   const tutorialElementCountRef = useRef(0); // Track element count for interactive steps
@@ -4047,6 +4280,7 @@ function Configurator({ project, onBack }) {
   // Reset selected cutout when element selection changes
   useEffect(() => {
     setSelectedCutoutId(null);
+    setSelectedInductionId(null);
   }, [selectedIds]);
   
   // Helper for single selection (backward compatibility)
@@ -4107,6 +4341,7 @@ function Configurator({ project, onBack }) {
             manufacturers: data.manufacturers || DEFAULT_LIBRARY.manufacturers,
             colors: data.colors || DEFAULT_LIBRARY.colors,
             formats: data.formats || DEFAULT_LIBRARY.formats,
+            inductionSystems: data.induction_systems || DEFAULT_LIBRARY.inductionSystems,
           };
           setLibrary(loadedLibrary);
           
@@ -4221,6 +4456,7 @@ function Configurator({ project, onBack }) {
   const saveTimeoutRef = useRef(null);
   const prevDebugTextureRef = useRef(debugTexture);
   const prevSelectedCutoutIdRef = useRef(selectedCutoutId);
+  const prevSelectedInductionIdRef = useRef(selectedInductionId);
   
   // Refs for pending transforms during drag (persists across re-renders)
   const pendingGroupTransformsRef = useRef({});
@@ -4840,37 +5076,58 @@ function Configurator({ project, onBack }) {
         mesh.rotation.y = newRot * Math.PI / 180;
         
       } else {
-        // Multiple ungrouped elements - rotate around center
+        // Multiple ungrouped elements - rotate around center (virtual group logic)
         const selectedEls = elements.filter(e => selectedIds.includes(e.id) && !e.groupId);
         if (selectedEls.length === 0) return;
         
-        const centerX = selectedEls.reduce((sum, e) => sum + getWorldPosDuringDrag(e).x, 0) / selectedEls.length;
-        const centerZ = selectedEls.reduce((sum, e) => sum + getWorldPosDuringDrag(e).z, 0) / selectedEls.length;
+        // Calculate and cache initial offsets from center (like group localOffsets)
+        if (!window._multiRotatePivot) {
+          const cx = selectedEls.reduce((sum, e) => sum + getWorldPosDuringDrag(e).x, 0) / selectedEls.length;
+          const cz = selectedEls.reduce((sum, e) => sum + getWorldPosDuringDrag(e).z, 0) / selectedEls.length;
+          window._multiRotatePivot = { x: cx, z: cz };
+          window._multiRotateOffsets = {};
+          window._multiRotateBaseRot = {};
+          selectedEls.forEach(el => {
+            const pos = getWorldPosDuringDrag(el);
+            const pending = pendingElementTransforms[el.id] || { 
+              position: { ...(el.position || { x: 0, z: 0 }) }, 
+              rotation: el.rotation || 0 
+            };
+            window._multiRotateOffsets[el.id] = { x: pos.x - cx, z: pos.z - cz };
+            window._multiRotateBaseRot[el.id] = pending.rotation;
+          });
+          window._multiRotateAccum = 0;
+        }
         
-        const angleRad = angleDelta * Math.PI / 180;
+        window._multiRotateAccum += angleDelta;
+        let totalAngle = window._multiRotateAccum;
+        
+        if (snapEnabled) {
+          totalAngle = Math.round(totalAngle / 5) * 5;
+        }
+        
+        const pivotX = window._multiRotatePivot.x;
+        const pivotZ = window._multiRotatePivot.z;
+        // NEGATIVE angle for position rotation (same as group logic)
+        const angleRad = -totalAngle * Math.PI / 180;
         
         selectedEls.forEach(el => {
           const mesh = meshesRef.current[el.id];
           if (!mesh) return;
           
-          const pending = pendingElementTransforms[el.id] || { 
-            position: { ...(el.position || { x: 0, z: 0 }) }, 
-            rotation: el.rotation || 0 
-          };
+          const offset = window._multiRotateOffsets[el.id];
+          if (!offset) return;
           
-          // Rotate position around center
-          const px = pending.position.x - centerX;
-          const pz = pending.position.z - centerZ;
-          const newX = px * Math.cos(angleRad) - pz * Math.sin(angleRad) + centerX;
-          const newZ = px * Math.sin(angleRad) + pz * Math.cos(angleRad) + centerZ;
+          const cosR = Math.cos(angleRad);
+          const sinR = Math.sin(angleRad);
           
-          const baseRot = rawRotations[el.id] ?? pending.rotation;
-          let newRot = baseRot + angleDelta;
+          const newX = pivotX + offset.x * cosR - offset.z * sinR;
+          const newZ = pivotZ + offset.x * sinR + offset.z * cosR;
+          
+          // Element rotation (positive, same as group)
+          const baseRot = window._multiRotateBaseRot[el.id] || 0;
+          const newRot = baseRot + totalAngle;
           rawRotations[el.id] = newRot;
-          
-          if (snapEnabled) {
-            newRot = Math.round(newRot / 5) * 5;
-          }
           
           pendingElementTransforms[el.id] = { position: { x: newX, z: newZ }, rotation: newRot };
           mesh.position.x = newX;
@@ -5339,6 +5596,11 @@ function Configurator({ project, onBack }) {
       window.clearSnapIndicators?.();
       // Clear duplicate flag
       window._pendingDuplicate = false;
+      // Clear multi-rotate pivot cache
+      window._multiRotatePivot = null;
+      window._multiRotateOffsets = null;
+      window._multiRotateBaseRot = null;
+      window._multiRotateAccum = 0;
       
       isDraggingOrbit = false;
       isDraggingPan = false;
@@ -5671,6 +5933,7 @@ function Configurator({ project, onBack }) {
       waterfallHeight: el.waterfallHeight,
       grainLengthwise: el.grainLengthwise,
       cutouts: el.cutouts, // Include cutouts in hash for change detection
+      inductionSystems: el.inductionSystems, // Include induction in hash
     });
   };
 
@@ -5743,6 +6006,7 @@ function Configurator({ project, onBack }) {
       
       // Check if selected cutout changed (affects cutout highlight)
       const cutoutSelectionChanged = prevSelectedCutoutIdRef.current !== selectedCutoutId;
+      const inductionSelectionChanged = prevSelectedInductionIdRef.current !== selectedInductionId;
       
       // Check if layout changed (affects UV mapping)
       const currentLayoutHash = getLayoutHash(el.id);
@@ -5751,7 +6015,7 @@ function Configurator({ project, onBack }) {
       
       // If only position/rotation changed, just update the mesh transform
       // But skip if we're dragging - the drag handlers update positions directly
-      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && !debugModeChanged && !layoutChanged && !cutoutSelectionChanged && meshesRef.current[el.id]) {
+      if (!isNew && !geometryChanged && !selectionChanged && !groupIdChanged && !debugModeChanged && !layoutChanged && !cutoutSelectionChanged && !inductionSelectionChanged && meshesRef.current[el.id]) {
         if (!isDraggingRef.current) {
           const mesh = meshesRef.current[el.id];
           const worldPos = getWorldPosition(el);
@@ -5769,13 +6033,13 @@ function Configurator({ project, onBack }) {
       
       // If debug mode changed, force full mesh recreation to update shader
       // If only selection or groupId or cutout selection changed and NO waterfall, update outline without recreating
-      if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged || cutoutSelectionChanged) && !hasWaterfall && meshesRef.current[el.id]) {
+      if (!isNew && !geometryChanged && !debugModeChanged && (selectionChanged || groupIdChanged || cutoutSelectionChanged || inductionSelectionChanged) && !hasWaterfall && meshesRef.current[el.id]) {
         const mesh = meshesRef.current[el.id];
         
-        // Remove existing outlines AND debug tile helpers from mesh
+        // Remove existing outlines AND debug tile helpers AND induction meshes from mesh
         const toRemove = [];
         mesh.traverse((child) => {
-          if (child.isLineSegments || child.userData?.isDebugTileHelper || child.userData?.isCutoutHighlight) {
+          if (child.isLineSegments || child.userData?.isDebugTileHelper || child.userData?.isCutoutHighlight || child.userData?.isInductionMesh) {
             toRemove.push({ parent: child.parent, child: child });
           }
         });
@@ -5926,6 +6190,54 @@ function Configurator({ project, onBack }) {
               mesh.add(outlineMesh);
             }
           }
+
+        // Re-create induction system meshes (they were removed in cleanup)
+        if (el.type === 'island' && el.inductionSystems && el.inductionSystems.length > 0) {
+          const thicknessCmLocal = (el.thickness || 12) / 1000;
+          el.inductionSystems.forEach(sys => {
+            const extrudeM = (sys.depth || 50) / 1000;
+            const isIndSelected = selectedInductionId === sys.id;
+            let indGeo;
+            if (sys.type === 'circle') {
+              const radiusM = (sys.radius || 5) / 100;
+              indGeo = new THREE.CylinderGeometry(radiusM, radiusM, extrudeM, 32);
+            } else {
+              const wM = (sys.width || 56) / 100;
+              const hM = (sys.height || 49) / 100;
+              indGeo = new THREE.BoxGeometry(wM, extrudeM, hM);
+            }
+            const inductionMat = new THREE.MeshBasicMaterial({ 
+              color: isIndSelected ? 0xc97a32 : 0x222222,
+              transparent: true, opacity: isIndSelected ? 0.5 : 0.3,
+              depthTest: true, side: THREE.DoubleSide,
+            });
+            const indMesh = new THREE.Mesh(indGeo, inductionMat);
+            indMesh.renderOrder = 500;
+            indMesh.userData.isInductionMesh = true;
+            indMesh.position.set((sys.centerX || 0) / 100, -thicknessCmLocal / 2 - extrudeM / 2, (sys.centerZ || 0) / 100);
+            indMesh.raycast = () => {};
+            const edges = new THREE.EdgesGeometry(indGeo, 15);
+            const edgeMat = new THREE.LineBasicMaterial({ 
+              color: isIndSelected ? 0xc97a32 : 0x555555,
+              depthTest: true, transparent: true, opacity: isIndSelected ? 1 : 0.6,
+            });
+            const edgeLines = new THREE.LineSegments(edges, edgeMat);
+            edgeLines.renderOrder = 501;
+            edgeLines.raycast = () => {};
+            edgeLines.userData.isInductionMesh = true;
+            indMesh.add(edgeLines);
+            if (isIndSelected) {
+              const glowEdges = new THREE.EdgesGeometry(indGeo, 15);
+              const glowMat = new THREE.LineBasicMaterial({ color: 0xc97a32, depthTest: true, transparent: true, opacity: 0.4 });
+              const glowLines = new THREE.LineSegments(glowEdges, glowMat);
+              glowLines.renderOrder = 502;
+              glowLines.raycast = () => {};
+              glowLines.userData.isInductionMesh = true;
+              indMesh.add(glowLines);
+            }
+            mesh.add(indMesh);
+          });
+        }
         
         // Update position/rotation too
         const worldPos = getWorldPosition(el);
@@ -6323,6 +6635,71 @@ function Configurator({ project, onBack }) {
         }
       }
 
+      // Induction systems (extruded boxes/cylinders under the slab) - x-ray visible through slab
+      if (el.type === 'island' && el.inductionSystems && el.inductionSystems.length > 0) {
+        el.inductionSystems.forEach(sys => {
+          const extrudeM = (sys.depth || 50) / 1000; // mm to meters
+          const isSelected = selectedInductionId === sys.id;
+          let indGeo;
+          if (sys.type === 'circle') {
+            const radiusM = (sys.radius || 5) / 100;
+            indGeo = new THREE.CylinderGeometry(radiusM, radiusM, extrudeM, 32);
+          } else {
+            const wM = (sys.width || 56) / 100;
+            const hM = (sys.height || 49) / 100;
+            indGeo = new THREE.BoxGeometry(wM, extrudeM, hM);
+          }
+          
+          // Material: visible under slab but not through waterfall
+          const inductionMat = new THREE.MeshBasicMaterial({ 
+            color: isSelected ? 0xc97a32 : 0x222222,
+            transparent: true, 
+            opacity: isSelected ? 0.5 : 0.3,
+            depthTest: true,
+            side: THREE.DoubleSide,
+          });
+          const indMesh = new THREE.Mesh(indGeo, inductionMat);
+          indMesh.renderOrder = 500;
+          indMesh.userData.isInductionMesh = true;
+          
+          // Position: centerX on length axis, centerZ on depth axis, hanging below slab
+          indMesh.position.set(
+            (sys.centerX || 0) / 100,
+            -thicknessCm / 2 - extrudeM / 2,
+            (sys.centerZ || 0) / 100
+          );
+          indMesh.raycast = () => {};
+          
+          // Edge lines (wireframe outline)
+          const edges = new THREE.EdgesGeometry(indGeo, 15);
+          const edgeMat = new THREE.LineBasicMaterial({ 
+            color: isSelected ? 0xc97a32 : 0x555555,
+            linewidth: isSelected ? 2 : 1,
+            depthTest: true,
+            transparent: true,
+            opacity: isSelected ? 1 : 0.6,
+          });
+          const edgeLines = new THREE.LineSegments(edges, edgeMat);
+          edgeLines.renderOrder = 501;
+          edgeLines.raycast = () => {};
+          indMesh.add(edgeLines);
+          
+          // Selection glow outline
+          if (isSelected) {
+            const glowEdges = new THREE.EdgesGeometry(indGeo, 15);
+            const glowMat = new THREE.LineBasicMaterial({ 
+              color: 0xc97a32, linewidth: 3, depthTest: true, transparent: true, opacity: 0.4
+            });
+            const glowLines = new THREE.LineSegments(glowEdges, glowMat);
+            glowLines.renderOrder = 502;
+            glowLines.raycast = () => {};
+            indMesh.add(glowLines);
+          }
+          
+          mesh.add(indMesh);
+        });
+      }
+
       sceneRef.current.add(mesh);
       meshesRef.current[el.id] = mesh;
       
@@ -6354,7 +6731,8 @@ function Configurator({ project, onBack }) {
     
     // Update selected cutout ref for next comparison
     prevSelectedCutoutIdRef.current = selectedCutoutId;
-  }, [elements, selectedIds, library, pieceLayout, groups, debugTexture, forceRenderKey, selectedCutoutId]);
+    prevSelectedInductionIdRef.current = selectedInductionId;
+  }, [elements, selectedIds, library, pieceLayout, groups, debugTexture, forceRenderKey, selectedCutoutId, selectedInductionId]);
 
   // Helper functions
   const getColorById = (id) => library?.colors?.find(c => c.id === id) || { id: id, name: 'Material necunoscut', color: '#666666' };
@@ -6369,6 +6747,19 @@ function Configurator({ project, onBack }) {
   };
 
   const addElement = (type) => {
+    // Check element limits
+    const stoneCount = elements.filter(e => e.type === 'island' || e.type === 'backsplash').length;
+    const cabinetCount = elements.filter(e => e.type === 'cabinet').length;
+    
+    if (type === 'cabinet' && cabinetCount >= 30) {
+      showNotification('Limită atinsă: maxim 30 corpuri de mobilier', 'error');
+      return;
+    }
+    if ((type === 'island' || type === 'backsplash') && stoneCount >= 30) {
+      showNotification('Limită atinsă: maxim 30 blaturi / contrablaturi', 'error');
+      return;
+    }
+    
     // Cabinet doesn't need material from library
     if (type === 'cabinet') {
       const el = {
@@ -6789,6 +7180,7 @@ function Configurator({ project, onBack }) {
   const selectedColor = selected ? getColorById(selected.material) : null;
   const selectedManufacturer = selected ? getManufacturerForColor(selected.material) : null;
   const availableThicknesses = selected ? getThicknessesForColor(selected.material) : [];
+  const [collapsedSections, setCollapsedSections] = useState({});
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -7721,8 +8113,12 @@ function Configurator({ project, onBack }) {
               </div>
 
               {/* Dimensions Section */}
-              <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
-                <div style={{ fontSize: '10px', color: '#c9a962', marginBottom: '10px', fontWeight: 600 }}>📐 DIMENSIUNI</div>
+              <div style={{ marginBottom: collapsedSections.dimensions ? '10px' : '16px', padding: collapsedSections.dimensions ? '0' : '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                <div onClick={() => setCollapsedSections(s => ({ ...s, dimensions: !s.dimensions }))} style={{ fontSize: '10px', color: '#c9a962', padding: collapsedSections.dimensions ? '6px 12px' : '0', marginBottom: collapsedSections.dimensions ? '0' : '10px', fontWeight: 600, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
+                  <span>📐 DIMENSIUNI</span>
+                  <span style={{ fontSize: '8px', color: '#555', transition: 'transform 0.2s', transform: collapsedSections.dimensions ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                </div>
+                {!collapsedSections.dimensions && (<>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                   <div>
                     <label style={{ fontSize: '10px', color: '#666', display: 'block', marginBottom: '4px' }}>Lungime (cm)</label>
@@ -7840,12 +8236,17 @@ function Configurator({ project, onBack }) {
                     {((selected.length * (selected.type === 'backsplash' ? selected.height : selected.depth)) / 10000).toFixed(3)} m²
                   </span>
                 </div>
+                </>)}
               </div>
 
               {/* Waterfall - only for blat type, moved here after dimensions */}
               {selected.type === 'island' && (
-                <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
-                  <div style={{ fontSize: '10px', color: '#c9a962', marginBottom: '10px', fontWeight: 600 }}>✨ CASCADĂ (WATERFALL)</div>
+                <div style={{ marginBottom: collapsedSections.waterfall ? '10px' : '16px', padding: collapsedSections.waterfall ? '0' : '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                  <div onClick={() => setCollapsedSections(s => ({ ...s, waterfall: !s.waterfall }))} style={{ fontSize: '10px', color: '#c9a962', padding: collapsedSections.waterfall ? '6px 12px' : '0', marginBottom: collapsedSections.waterfall ? '0' : '10px', fontWeight: 600, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
+                    <span>✨ CASCADĂ (WATERFALL)</span>
+                    <span style={{ fontSize: '8px', color: '#555', transition: 'transform 0.2s', transform: collapsedSections.waterfall ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                  </div>
+                  {!collapsedSections.waterfall && (<>
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '11px', padding: '8px 12px', background: selected.waterfallLeft ? 'rgba(201,169,98,0.2)' : '#1a1a1a', border: `1px solid ${selected.waterfallLeft ? '#c9a962' : '#333'}`, borderRadius: '4px', flex: 1, justifyContent: 'center' }}>
                       <input type="checkbox" checked={selected.waterfallLeft || false} onChange={e => updateElement(selected.id, { waterfallLeft: e.target.checked })} style={{ display: 'none' }} />
@@ -7875,12 +8276,17 @@ function Configurator({ project, onBack }) {
                       />
                     </div>
                   )}
+                  </>)}
                 </div>
               )}
 
               {/* Material Section - Cascading selectors with gallery */}
-              <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
-                <div style={{ fontSize: '10px', color: '#c9a962', marginBottom: '10px', fontWeight: 600 }}>🎨 MATERIAL</div>
+              <div style={{ marginBottom: collapsedSections.material ? '10px' : '16px', padding: collapsedSections.material ? '0' : '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                <div onClick={() => setCollapsedSections(s => ({ ...s, material: !s.material }))} style={{ fontSize: '10px', color: '#c9a962', padding: collapsedSections.material ? '6px 12px' : '0', marginBottom: collapsedSections.material ? '0' : '10px', fontWeight: 600, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
+                  <span>🎨 MATERIAL</span>
+                  <span style={{ fontSize: '8px', color: '#555', transition: 'transform 0.2s', transform: collapsedSections.material ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                </div>
+                {!collapsedSections.material && (<>
                 
                 {/* Material Type */}
                 <div style={{ marginBottom: '10px' }}>
@@ -8085,11 +8491,16 @@ function Configurator({ project, onBack }) {
                     ))}
                   </div>
                 </div>
+                </>)}
               </div>
 
               {/* Notes */}
-              <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
-                <div style={{ fontSize: '10px', color: '#c9a962', marginBottom: '10px', fontWeight: 600 }}>📝 NOTE</div>
+              <div style={{ marginBottom: collapsedSections.notes ? '10px' : '16px', padding: collapsedSections.notes ? '0' : '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                <div onClick={() => setCollapsedSections(s => ({ ...s, notes: !s.notes }))} style={{ fontSize: '10px', color: '#c9a962', padding: collapsedSections.notes ? '6px 12px' : '0', marginBottom: collapsedSections.notes ? '0' : '10px', fontWeight: 600, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
+                  <span>📝 NOTE</span>
+                  <span style={{ fontSize: '8px', color: '#555', transition: 'transform 0.2s', transform: collapsedSections.notes ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                </div>
+                {!collapsedSections.notes && (
                 <textarea 
                   value={selected.notes || ''} 
                   onChange={e => updateElement(selected.id, { notes: e.target.value })}
@@ -8097,11 +8508,16 @@ function Configurator({ project, onBack }) {
                   rows={3}
                   style={{ ...inputStyle, padding: '8px', resize: 'vertical', fontSize: '11px' }} 
                 />
+                )}
               </div>
 
               {/* Cutouts Section */}
-              <div data-tutorial="cutouts-section" style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
-                <div style={{ fontSize: '10px', color: '#c9a962', marginBottom: '10px', fontWeight: 600 }}>✂️ DECUPAJE</div>
+              <div data-tutorial="cutouts-section" style={{ marginBottom: collapsedSections.cutouts ? '10px' : '16px', padding: collapsedSections.cutouts ? '0' : '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                <div onClick={() => setCollapsedSections(s => ({ ...s, cutouts: !s.cutouts }))} style={{ fontSize: '10px', color: '#c9a962', padding: collapsedSections.cutouts ? '6px 12px' : '0', marginBottom: collapsedSections.cutouts ? '0' : '10px', fontWeight: 600, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
+                  <span>✂️ DECUPAJE {selected.cutouts?.length > 0 ? `(${selected.cutouts.length})` : ''}</span>
+                  <span style={{ fontSize: '8px', color: '#555', transition: 'transform 0.2s', transform: collapsedSections.cutouts ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                </div>
+                {!collapsedSections.cutouts && (<>
                 
                 {/* Add Cutout Dropdown */}
                 <div style={{ marginBottom: '12px' }}>
@@ -8180,7 +8596,7 @@ function Configurator({ project, onBack }) {
                       return (
                         <div 
                           key={cutout.id} 
-                          onClick={() => setSelectedCutoutId(cutout.id)}
+                          onClick={() => { setSelectedCutoutId(cutout.id); setSelectedInductionId(null); }}
                           style={{
                             padding: '10px',
                             background: isCutoutSelected ? 'rgba(0, 200, 255, 0.1)' : '#1a1a1a',
@@ -8241,8 +8657,8 @@ function Configurator({ project, onBack }) {
                                   updateElement(selected.id, { cutouts: newCutouts });
                                 }
                               }}
-                              style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}
-                            >×</button>
+                              style={{ background: 'none', border: '1px solid rgba(201,98,98,0.3)', color: '#c96262', cursor: 'pointer', fontSize: '9px', padding: '2px 6px', borderRadius: '3px' }}
+                            >Șterge</button>
                           </div>
 
                           {/* Dimensions */}
@@ -8257,6 +8673,7 @@ function Configurator({ project, onBack }) {
                                   updateElement(selected.id, { cutouts: newCutouts });
                                 }}
                                 min={1}
+                                max={160}
                                 step={0.5}
                                 style={{ ...inputStyle, padding: '6px', fontSize: '11px', width: '80px' }}
                               />
@@ -8276,6 +8693,7 @@ function Configurator({ project, onBack }) {
                                     updateElement(selected.id, { cutouts: newCutouts });
                                   }}
                                   min={1}
+                                  max={320}
                                   step={1}
                                   style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                                 />
@@ -8293,6 +8711,7 @@ function Configurator({ project, onBack }) {
                                     updateElement(selected.id, { cutouts: newCutouts });
                                   }}
                                   min={1}
+                                  max={160}
                                   step={1}
                                   style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                                 />
@@ -8308,7 +8727,7 @@ function Configurator({ project, onBack }) {
                                       updateElement(selected.id, { cutouts: newCutouts });
                                     }}
                                     min={0}
-                                    max={Math.min((cutout.width || 0) / 2, (cutout.height || 0) / 2)}
+                                    max={Math.min(30, (cutout.width || 0) / 2, (cutout.height || 0) / 2)}
                                     step={0.5}
                                     style={{ ...inputStyle, padding: '4px 6px', fontSize: '11px' }}
                                   />
@@ -8389,7 +8808,152 @@ function Configurator({ project, onBack }) {
                     ⚠️ Limită de 6 decupaje atinsă - risc de pierdere integritate structurală
                   </div>
                 )}
+                </>)}
               </div>
+
+              {/* Induction Systems Section - only for island (blat) with ceramic material */}
+              {selected.type === 'island' && (() => {
+                const isCeramic = (() => {
+                  const color = library.colors.find(c => c.id === selected.material);
+                  const mfr = library.manufacturers.find(m => m.id === color?.manufacturer);
+                  return mfr?.materialType === 'ceramic';
+                })();
+                return (
+              <div style={{ marginBottom: collapsedSections.induction ? '10px' : '16px', padding: collapsedSections.induction ? '0' : '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+                <div onClick={() => setCollapsedSections(s => ({ ...s, induction: !s.induction }))} style={{ fontSize: '10px', color: isCeramic ? '#c9a962' : '#555', padding: collapsedSections.induction ? '6px 12px' : '0', marginBottom: collapsedSections.induction ? '0' : '10px', fontWeight: 600, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}>
+                  <span>⚡ SISTEME INDUCTIE {selected.inductionSystems?.length > 0 ? `(${selected.inductionSystems.length})` : ''}</span>
+                  <span style={{ fontSize: '8px', color: '#555', transition: 'transform 0.2s', transform: collapsedSections.induction ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+                </div>
+                {!collapsedSections.induction && (<>
+                {!isCeramic ? (
+                  <div style={{ fontSize: '10px', color: '#888', padding: '12px', textAlign: 'center', background: '#1a1a1a', borderRadius: '4px' }}>
+                    Sistemele de inductie wireless sunt disponibile doar pentru materiale de tip <strong style={{ color: '#c9a962' }}>Ceramică</strong>.
+                  </div>
+                ) : (<>
+                {/* Add Induction Dropdown */}
+                <div style={{ marginBottom: '12px' }}>
+                  <select
+                    value=""
+                    onChange={e => {
+                      if (!e.target.value) return;
+                      const preset = (library.inductionSystems || []).find(s => s.id === e.target.value);
+                      if (!preset) return;
+                      if ((selected.inductionSystems || []).length >= 3) return;
+                      const newSystem = {
+                        id: Math.random().toString(36).substr(2, 9),
+                        presetId: preset.id,
+                        name: preset.name,
+                        type: preset.type,
+                        width: preset.width || null,
+                        height: preset.height || null,
+                        radius: preset.radius || null,
+                        depth: preset.depth,
+                        centerX: 0,
+                        centerZ: 0,
+                      };
+                      updateElement(selected.id, { inductionSystems: [...(selected.inductionSystems || []), newSystem] });
+                    }}
+                    disabled={(selected.inductionSystems || []).length >= 3}
+                    style={{ ...inputStyle, padding: '8px', width: '100%', cursor: (selected.inductionSystems || []).length >= 3 ? 'not-allowed' : 'pointer' }}
+                  >
+                    <option value="">{(selected.inductionSystems || []).length >= 3 ? 'Limită atinsă (max 3)' : '+ Adaugă sistem inductie...'}</option>
+                    {(library.inductionSystems || []).map(sys => (
+                      <option key={sys.id} value={sys.id}>
+                        {sys.icon} {sys.name} ({sys.type === 'circle' ? `Ø${(sys.radius || 0) * 2}cm` : `${sys.width}×${sys.height}cm`})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Induction Systems List */}
+                {(selected.inductionSystems || []).map((sys, idx) => {
+                  const preset = (library.inductionSystems || []).find(s => s.id === sys.presetId);
+                  const pieceLength = selected.length;
+                  const pieceDepth = selected.depth;
+                  const sysWidth = sys.type === 'circle' ? (sys.radius || 0) * 2 : (sys.width || 0);
+                  const sysDepth = sys.type === 'circle' ? (sys.radius || 0) * 2 : (sys.height || 0);
+                  const minFront = preset?.minFront || 3;
+                  const minBack = preset?.minBack || 3;
+                  const cotaStanga = (pieceLength / 2) + (sys.centerX || 0) - sysWidth / 2;
+                  const cotaFata = (pieceDepth / 2) + (sys.centerZ || 0) - sysDepth / 2;
+                  
+                  return (
+                    <div key={sys.id} 
+                      onClick={() => { setSelectedInductionId(selectedInductionId === sys.id ? null : sys.id); setSelectedCutoutId(null); }}
+                      style={{ marginBottom: '8px', padding: '10px', background: selectedInductionId === sys.id ? 'rgba(201,122,50,0.15)' : '#1a1a1a', borderRadius: '6px', border: `1px solid ${selectedInductionId === sys.id ? '#c97a32' : '#2a2a2a'}`, cursor: 'pointer', transition: 'all 0.15s' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 500, color: selectedInductionId === sys.id ? '#c97a32' : '#ccc' }}>{preset?.icon || '⚡'} {sys.name}</span>
+                        <button onClick={() => {
+                          const updated = [...(selected.inductionSystems || [])];
+                          updated.splice(idx, 1);
+                          updateElement(selected.id, { inductionSystems: updated });
+                        }} style={{ background: 'none', border: 'none', color: '#c96262', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}>×</button>
+                      </div>
+                      <div style={{ fontSize: '9px', color: '#666', marginBottom: '6px' }}>
+                        {sys.type === 'circle' ? `Ø${(sys.radius || 0) * 2}cm` : `${sys.width}×${sys.height}cm`}
+                        {' · '}{sys.depth}mm sub blat
+                        {' · min față '}{minFront}cm / spate {minBack}cm
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                        <div>
+                          <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Cota stânga (cm)</label>
+                          <NumericInput
+                            value={Math.round(cotaStanga * 10) / 10}
+                            onChange={v => {
+                              const newCenterX = v + sysWidth / 2 - pieceLength / 2;
+                              const clampedX = Math.max(-pieceLength / 2 + sysWidth / 2, Math.min(pieceLength / 2 - sysWidth / 2, newCenterX));
+                              const updated = [...(selected.inductionSystems || [])];
+                              updated[idx] = { ...sys, centerX: clampedX };
+                              updateElement(selected.id, { inductionSystems: updated });
+                            }}
+                            min={0}
+                            max={pieceLength - sysWidth}
+                            step={0.5}
+                            style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '9px', color: '#666', display: 'block', marginBottom: '2px' }}>Cota față (cm)</label>
+                          <NumericInput
+                            value={Math.round(cotaFata * 10) / 10}
+                            onChange={v => {
+                              const newCenterZ = v + sysDepth / 2 - pieceDepth / 2;
+                              const minZ = -pieceDepth / 2 + sysDepth / 2 + minFront;
+                              const maxZ = pieceDepth / 2 - sysDepth / 2 - minBack;
+                              const clampedZ = Math.max(minZ, Math.min(maxZ, newCenterZ));
+                              const updated = [...(selected.inductionSystems || [])];
+                              updated[idx] = { ...sys, centerZ: clampedZ };
+                              updateElement(selected.id, { inductionSystems: updated });
+                            }}
+                            min={minFront}
+                            max={pieceDepth - sysDepth - minBack}
+                            step={0.5}
+                            style={{ ...inputStyle, padding: '6px', fontSize: '11px' }}
+                          />
+                        </div>
+                      </div>
+                      {(() => {
+                        const validation = validateInduction(sys, pieceLength, pieceDepth, selected.inductionSystems || [], selected.cutouts || [], preset);
+                        if (validation.errors.length === 0 && validation.warnings.length === 0) return null;
+                        return (
+                          <div style={{ marginTop: '6px' }}>
+                            {validation.errors.map((err, i) => (
+                              <div key={`e${i}`} style={{ fontSize: '9px', color: '#c96262', padding: '3px 6px', background: 'rgba(201,98,98,0.1)', borderRadius: '3px', marginBottom: '2px' }}>⛔ {err}</div>
+                            ))}
+                            {validation.warnings.map((w, i) => (
+                              <div key={`w${i}`} style={{ fontSize: '9px', color: '#c9a962', padding: '3px 6px', background: 'rgba(201,169,98,0.1)', borderRadius: '3px', marginBottom: '2px' }}>⚠️ {w}</div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  );
+                })}
+                </>)}
+                </>)}
+              </div>
+              );
+              })()}
 
               {/* Actions */}
               <div style={{ display: 'flex', gap: '8px', paddingTop: '12px', borderTop: '1px solid #2a2a2a' }}>
@@ -8521,6 +9085,8 @@ function Configurator({ project, onBack }) {
         pushManualLayoutToHistory={pushManualLayoutToHistory}
         selectedCutoutId={selectedCutoutId}
         setSelectedCutoutId={setSelectedCutoutId}
+        selectedInductionId={selectedInductionId}
+        setSelectedInductionId={setSelectedInductionId}
         exportGLB={exportGLB}
       />
       </div>
@@ -8541,7 +9107,7 @@ function Configurator({ project, onBack }) {
 // SLAB CALCULATOR FOOTER COMPONENT
 // ============================================
 
-function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, supabase, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory, selectedCutoutId, setSelectedCutoutId, exportGLB }) {
+function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, supabase, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory, selectedCutoutId, setSelectedCutoutId, selectedInductionId, setSelectedInductionId, exportGLB }) {
   const [sendingQuote, setSendingQuote] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState(null); // 'success' | 'error' | null
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -9179,6 +9745,22 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
     }
   });
   const hasCutoutErrors = cutoutErrors.length > 0;
+
+  // Check for induction system errors across all elements
+  const inductionErrors = [];
+  elements.forEach(el => {
+    if (el.type === 'island' && el.inductionSystems && el.inductionSystems.length > 0) {
+      el.inductionSystems.forEach(sys => {
+        const preset = (library.inductionSystems || []).find(s => s.id === sys.presetId);
+        const validation = validateInduction(sys, el.length, el.depth, el.inductionSystems, el.cutouts || [], preset);
+        if (!validation.valid) {
+          inductionErrors.push({ element: el.name, system: sys.name, errors: validation.errors });
+        }
+      });
+    }
+  });
+  const hasInductionErrors = inductionErrors.length > 0;
+  const hasAnyErrors = hasCutoutErrors || hasInductionErrors;
   
   const count = tiles.length;
   
@@ -10229,14 +10811,14 @@ EOF
                                           width: cutWPx,
                                           height: cutHPx,
                                           borderRadius: '50%',
-                                          background: selectedCutoutId === cutout.id ? 'rgba(0, 200, 255, 0.3)' : 'rgba(30, 30, 30, 0.85)',
+                                          background: selectedCutoutId === cutout.id ? 'rgba(0, 200, 255, 0.25)' : 'transparent',
                                           border: selectedCutoutId === cutout.id 
-                                            ? '3px solid #00c8ff' 
-                                            : (p.isManual ? '2px dashed #c9a962' : '2px solid #c9a962'),
+                                            ? '2px solid #00c8ff' 
+                                            : '2px dashed rgba(0, 200, 255, 0.6)',
                                           pointerEvents: shouldHighlight ? 'auto' : 'none',
                                           cursor: shouldHighlight ? 'pointer' : 'default',
                                           boxSizing: 'border-box',
-                                          boxShadow: selectedCutoutId === cutout.id ? '0 0 12px rgba(0, 200, 255, 0.6)' : 'none',
+                                          boxShadow: selectedCutoutId === cutout.id ? '0 0 10px rgba(0, 200, 255, 0.5)' : 'none',
                                         }}
                                         title={cutout.name}
                                       />
@@ -10278,19 +10860,75 @@ EOF
                                           width: cutWPx,
                                           height: cutHPx,
                                           borderRadius: cornerR,
-                                          background: selectedCutoutId === cutout.id ? 'rgba(0, 200, 255, 0.3)' : 'rgba(30, 30, 30, 0.85)',
+                                          background: selectedCutoutId === cutout.id ? 'rgba(0, 200, 255, 0.25)' : 'transparent',
                                           border: selectedCutoutId === cutout.id 
-                                            ? '3px solid #00c8ff' 
-                                            : (p.isManual ? '2px dashed #c9a962' : '2px solid #c9a962'),
+                                            ? '2px solid #00c8ff' 
+                                            : '2px dashed rgba(0, 200, 255, 0.6)',
                                           pointerEvents: shouldHighlight ? 'auto' : 'none',
                                           cursor: shouldHighlight ? 'pointer' : 'default',
                                           boxSizing: 'border-box',
-                                          boxShadow: selectedCutoutId === cutout.id ? '0 0 12px rgba(0, 200, 255, 0.6)' : 'none',
+                                          boxShadow: selectedCutoutId === cutout.id ? '0 0 10px rgba(0, 200, 255, 0.5)' : 'none',
                                         }}
                                         title={cutout.name}
                                       />
                                     );
                                   }
+                                })}
+
+                                {/* Render induction systems as dashed outlines - only on main slab, not waterfall */}
+                                {p.pieceType === 'slab' && pieceElement?.type === 'island' && pieceElement?.inductionSystems?.map((sys, indIdx) => {
+                                  const pieceLengthCm = pieceElement.length;
+                                  const pieceDepthCm = pieceElement.depth;
+                                  const isRotatedOnTile = p.rotated;
+                                  
+                                  const sysW = sys.type === 'circle' ? (sys.radius || 0) * 2 : (sys.width || 0);
+                                  const sysH = sys.type === 'circle' ? (sys.radius || 0) * 2 : (sys.height || 0);
+                                  // cotaStanga and cotaFata from center offsets
+                                  const cotaStanga = (pieceLengthCm / 2) + (sys.centerX || 0) - sysW / 2;
+                                  const cotaFata = (pieceDepthCm / 2) + (sys.centerZ || 0) - sysH / 2;
+                                  
+                                  let iLeft, iTop, iW, iH;
+                                  if (isRotatedOnTile) {
+                                    iLeft = (pieceDepthCm - cotaFata - sysH) * uniformScale;
+                                    iTop = (pieceLengthCm - cotaStanga - sysW) * uniformScale;
+                                    iW = sysH * uniformScale;
+                                    iH = sysW * uniformScale;
+                                  } else {
+                                    iLeft = cotaStanga * uniformScale;
+                                    iTop = (pieceDepthCm - cotaFata - sysH) * uniformScale;
+                                    iW = sysW * uniformScale;
+                                    iH = sysH * uniformScale;
+                                  }
+                                  
+                                  return (
+                                    <div
+                                      key={`ind-${indIdx}`}
+                                      onClick={(e) => {
+                                        if (shouldHighlight) {
+                                          e.stopPropagation();
+                                          setSelectedInductionId(selectedInductionId === sys.id ? null : sys.id);
+                                          setSelectedCutoutId(null);
+                                        }
+                                      }}
+                                      style={{
+                                        position: 'absolute',
+                                        left: iLeft,
+                                        top: iTop,
+                                        width: iW,
+                                        height: iH,
+                                        borderRadius: sys.type === 'circle' ? '50%' : '3px',
+                                        background: selectedInductionId === sys.id ? 'rgba(255, 170, 60, 0.25)' : 'transparent',
+                                        border: selectedInductionId === sys.id 
+                                          ? '2px solid #ffaa3c' 
+                                          : '2px dashed rgba(255, 170, 60, 0.6)',
+                                        pointerEvents: shouldHighlight ? 'auto' : 'none',
+                                        cursor: shouldHighlight ? 'pointer' : 'default',
+                                        boxSizing: 'border-box',
+                                        boxShadow: selectedInductionId === sys.id ? '0 0 10px rgba(255, 170, 60, 0.5)' : 'none',
+                                      }}
+                                      title={`⚡ ${sys.name}`}
+                                    />
+                                  );
                                 })}
                                 
                                 {/* Joint edge indicators */}
@@ -10447,19 +11085,19 @@ EOF
           {/* Solicita Oferta Button */}
           <button 
             onClick={() => setShowConfirmDialog(true)}
-            disabled={sendingQuote || hasCutoutErrors}
+            disabled={sendingQuote || hasAnyErrors}
             style={{ 
               padding: '5px 10px', 
-              background: (sendingQuote || hasCutoutErrors) ? '#1a1a1a' : 'transparent', 
-              border: `1px solid ${hasCutoutErrors ? '#c96262' : '#c9a962'}`,
-              color: hasCutoutErrors ? '#c96262' : '#c9a962', 
+              background: (sendingQuote || hasAnyErrors) ? '#1a1a1a' : 'transparent', 
+              border: `1px solid ${hasAnyErrors ? '#c96262' : '#c9a962'}`,
+              color: hasAnyErrors ? '#c96262' : '#c9a962', 
               fontWeight: 600, 
-              cursor: (sendingQuote || hasCutoutErrors) ? 'not-allowed' : 'pointer',
+              cursor: (sendingQuote || hasAnyErrors) ? 'not-allowed' : 'pointer',
               fontSize: '11px',
-              opacity: (sendingQuote || hasCutoutErrors) ? 0.7 : 1,
+              opacity: (sendingQuote || hasAnyErrors) ? 0.7 : 1,
               transition: 'all 0.2s ease',
             }}
-            title={hasCutoutErrors ? 'Corectează erorile la decupaje înainte de a trimite oferta' : ''}
+            title={hasAnyErrors ? 'Corectează erorile la decupaje / sisteme inductie înainte de a trimite oferta' : ''}
           >
             {sendingQuote ? '⏳...' : (hasCutoutErrors ? '⛔ Erori' : '📧 Ofertă')}
           </button>
