@@ -1855,6 +1855,25 @@ const GlobalStyles = () => (
       scrollbar-width: thin;
       scrollbar-color: #3a3a3a transparent;
     }
+    /* Tutorial Animations */
+    @keyframes tutorialPulse {
+      0% { box-shadow: 0 0 0 3px rgba(201,169,98,0.7), 0 0 16px rgba(201,169,98,0.3); }
+      50% { box-shadow: 0 0 0 6px rgba(201,169,98,0.4), 0 0 24px rgba(201,169,98,0.15); }
+      100% { box-shadow: 0 0 0 3px rgba(201,169,98,0.7), 0 0 16px rgba(201,169,98,0.3); }
+    }
+    @keyframes tutorialPulseNoBg {
+      0% { box-shadow: 0 0 0 3px rgba(201,169,98,0.7), 0 0 16px rgba(201,169,98,0.3); }
+      50% { box-shadow: 0 0 0 6px rgba(201,169,98,0.4), 0 0 24px rgba(201,169,98,0.15); }
+      100% { box-shadow: 0 0 0 3px rgba(201,169,98,0.7), 0 0 16px rgba(201,169,98,0.3); }
+    }
+    @keyframes tutorialFadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes tutorialSpotlightIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
   `}</style>
 );
 
@@ -1895,6 +1914,388 @@ const secondaryBtnStyle = {
   background: '#2a2a2a',
   color: '#fff',
 };
+
+// ============================================
+// TUTORIAL STEPS (module-level constant)
+// ============================================
+
+const TUTORIAL_STEPS = [
+  {
+    type: 'modal',
+    title: 'Bine ai venit în Configurator! 👋',
+    text: 'Hai să facem un tur rapid. Vei învăța să creezi blaturi, contrablaturi, să le modifici și să adaugi decupaje.',
+    buttonText: 'Hai să începem →',
+  },
+  {
+    type: 'spotlight', target: 'add-blat',
+    title: 'Pasul 1: Adaugă un Blat',
+    text: 'Click pe butonul „+ Blat" pentru a adăuga primul element.',
+    tasks: [{ key: 'added-blat', label: 'Adaugă un blat' }],
+    passthrough: 'target', padding: 6,
+  },
+  {
+    type: 'spotlight', target: 'properties-panel',
+    title: 'Pasul 2: Proprietăți',
+    text: 'Aici modifici dimensiunile, materialul, grosimea și direcția fibrei.',
+    tasks: [{ key: 'changed-dimension', label: 'Modifică o dimensiune' }],
+    passthrough: 'all', padding: 0, position: 'left',
+  },
+  {
+    type: 'spotlight', target: 'add-contrablat',
+    title: 'Pasul 3: Adaugă un Contrablat',
+    text: 'Panoul vertical care se montează pe perete, deasupra blatului.',
+    tasks: [{ key: 'added-contrablat', label: 'Adaugă un contrablat' }],
+    passthrough: 'target', padding: 6,
+  },
+  {
+    type: 'spotlight', target: 'footer',
+    title: 'Pasul 4: Încadrarea pe Plăci',
+    text: 'Observă secțiunea de jos — aici se calculează automat câte plăci de ceramică ai nevoie.\n\nBlatul (12mm) și contrablatul (6mm) au grosimi diferite, deci apar pe plăci separate. Fiecare material și grosime generează propriul plan de tăiere.',
+    buttonText: 'Am înțeles →',
+    padding: 0, position: 'top',
+  },
+  {
+    type: 'spotlight', target: 'canvas-3d',
+    title: 'Pasul 5: Controlează Camera',
+    text: 'Învață să navighezi în scenă:',
+    tasks: [
+      { key: 'orbited-camera', label: 'Orbită cameră (Middle-click + drag)' },
+      { key: 'zoomed-camera', label: 'Zoom (Scroll)' },
+      { key: 'panned-camera', label: 'Pan cameră (Right-click + drag)' },
+    ],
+    passthrough: 'all', padding: 0, position: 'top-left',
+  },
+  {
+    type: 'spotlight', target: 'canvas-3d',
+    title: 'Pasul 6: Mută și Rotește',
+    text: 'Selectează un element, apasă tasta G sau R (o singură apăsare, nu ține apăsat), apoi trage cu mouse-ul:',
+    tasks: [
+      { key: 'moved-element', label: 'Apasă G, apoi drag pentru a muta' },
+      { key: 'rotated-element', label: 'Apasă R, apoi drag pentru a roti' },
+    ],
+    passthrough: 'all', padding: 0, position: 'top-left',
+  },
+  {
+    type: 'spotlight', target: 'canvas-3d',
+    title: 'Pasul 7: Decupaje',
+    text: 'Selectează un blat din scenă, apoi adaugă un decupaj din panoul de proprietăți.',
+    tasks: [
+      { key: 'selected-blat', label: 'Selectează un blat', target: 'canvas-3d' },
+      { key: 'added-cutout', label: 'Adaugă un decupaj', target: 'properties-panel', scrollTo: 'cutouts-section' },
+    ],
+    passthrough: 'all', padding: 4, position: 'top-left',
+    fixedTooltip: true,
+  },
+  {
+    type: 'spotlight', target: 'canvas-3d',
+    title: 'Pasul 8: Grupează / Degrupează',
+    text: 'Selectează 2+ elemente cu Ctrl+Click, grupează-le, apoi degrupează.',
+    tasks: [
+      { key: 'multi-selected', label: 'Selectează 2+ elemente (Ctrl+Click)' },
+      { key: 'created-group', label: 'Grupează (Ctrl+G)' },
+      { key: 'ungrouped', label: 'Degrupează (Ctrl+X)' },
+    ],
+    passthrough: 'all', padding: 0, position: 'top-right',
+    fixedTooltip: 'top-right',
+  },
+  {
+    type: 'spotlight', target: 'footer',
+    title: 'Pasul 9: Cerere de Ofertă',
+    text: 'Când ai terminat configurația, apasă butonul „Ofertă" pentru a trimite o cerere de preț. Vei primi oferta pe email.',
+    buttonText: 'Am înțeles →',
+    padding: 0, position: 'top',
+  },
+  {
+    type: 'modal',
+    title: 'Ești gata! 🎉',
+    text: 'Scurtături utile:\n• G = Mută  •  R = Rotește  •  D = Duplică\n• Delete = Șterge  •  Ctrl+Z = Anulează\n• Ctrl+G = Grupează  •  Ctrl+X = Degrupează\n• Ctrl+Click = Selecție multiplă\n\nPoți relua tutorial-ul oricând din butonul ❓.',
+    buttonText: 'Închide',
+    isFinal: true,
+  },
+];
+
+// ============================================
+// TUTORIAL OVERLAY COMPONENT (memoized — never re-renders from parent)
+// ============================================
+
+function computeTooltipPos(spotRect, step, posOverride) {
+  if (!spotRect) return {};
+  const W = 340, H = 200, gap = 16;
+  const vW = window.innerWidth, vH = window.innerHeight;
+  let pl = posOverride || step.position || 'auto';
+
+  // Fixed corner positions — tooltip sits in a corner, doesn't block the center
+  if (pl === 'top-left') {
+    return { position: 'fixed', width: W, zIndex: 10003,
+      top: spotRect.top + gap, left: spotRect.left + gap,
+    };
+  }
+  if (pl === 'top-right') {
+    return { position: 'fixed', width: W, zIndex: 10003,
+      top: spotRect.top + gap, left: spotRect.left + spotRect.width - W - gap,
+    };
+  }
+  if (pl === 'center') {
+    return { position: 'fixed', width: W, zIndex: 10003,
+      top: Math.max(12, spotRect.top + spotRect.height / 2 - H / 2),
+      left: Math.max(12, Math.min(spotRect.left + spotRect.width / 2 - W / 2, vW - W - 12)),
+    };
+  }
+  if (pl === 'auto') {
+    if (vH - (spotRect.top + spotRect.height) >= H + gap) pl = 'bottom';
+    else if (spotRect.top >= H + gap) pl = 'top';
+    else if (vW - (spotRect.left + spotRect.width) >= W + gap) pl = 'right';
+    else pl = 'left';
+  }
+  const s = { position: 'fixed', width: W, zIndex: 10003 };
+  const cx = Math.max(12, Math.min(spotRect.left + spotRect.width / 2 - W / 2, vW - W - 12));
+  const cy = Math.max(12, Math.min(spotRect.top + spotRect.height / 2 - H / 2, vH - H - 12));
+  if (pl === 'bottom') { s.top = spotRect.top + spotRect.height + gap; s.left = cx; }
+  else if (pl === 'top') { s.top = spotRect.top - H - gap; s.left = cx; }
+  else if (pl === 'right') { s.top = cy; s.left = spotRect.left + spotRect.width + gap; }
+  else { s.top = cy; s.left = spotRect.left - W - gap; }
+  return s;
+}
+
+const TutorialOverlay = React.memo(function TutorialOverlay({ step: stepIndex, actions, onClose, onAdvance, onBack }) {
+  const [spotRect, setSpotRect] = useState(null);
+  const prevTargetRef = useRef(null);
+
+  const stepData = TUTORIAL_STEPS[stepIndex] || null;
+
+  // Determine active target: first incomplete task's target, or step default
+  const { activeTarget, activeScrollTo, activePosition } = useMemo(() => {
+    if (!stepData) return { activeTarget: null, activeScrollTo: null, activePosition: null };
+    let target = stepData.target;
+    let scrollTo = null; // null sau selector string
+    let position = null;
+    if (stepData.tasks) {
+      for (const task of stepData.tasks) {
+        if (!actions[task.key] && task.target) {
+          target = task.target;
+          scrollTo = task.scrollTo || null;
+          position = task.position || null;
+          break;
+        }
+      }
+      // Dacă toate task-urile cu target sunt gata, folosește ultimul target
+      if (stepData.tasks.every(t => !t.target || actions[t.key])) {
+        const lastWithTarget = [...stepData.tasks].reverse().find(t => t.target);
+        if (lastWithTarget) {
+          target = lastWithTarget.target;
+          position = lastWithTarget.position || null;
+        }
+      }
+    }
+    return { activeTarget: target, activeScrollTo: scrollTo, activePosition: position };
+  }, [stepIndex, actions, stepData]);
+
+  // Măsoară spotlight rect — re-măsoară când activeTarget se schimbă
+  useEffect(() => {
+    if (!stepData || stepData.type !== 'spotlight' || !activeTarget) {
+      setSpotRect(null);
+      prevTargetRef.current = null;
+      return;
+    }
+
+    const needsScroll = activeScrollTo && prevTargetRef.current !== activeTarget;
+
+    const measure = () => {
+      const el = document.querySelector(`[data-tutorial="${activeTarget}"]`);
+      if (!el) return;
+
+      // Scroll la un element specific din container (ex: cutouts-section în properties-panel)
+      if (needsScroll) {
+        const scrollTarget = typeof activeScrollTo === 'string' 
+          ? document.querySelector(`[data-tutorial="${activeScrollTo}"]`)
+          : el;
+        if (scrollTarget) {
+          scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }
+
+      prevTargetRef.current = activeTarget;
+
+      const r = el.getBoundingClientRect();
+      const pad = stepData.padding || 4;
+      setSpotRect({
+        top: Math.round(r.top - pad),
+        left: Math.round(r.left - pad),
+        width: Math.round(r.width + pad * 2),
+        height: Math.round(r.height + pad * 2),
+      });
+    };
+
+    const raf = requestAnimationFrame(() => {
+      if (needsScroll) {
+        setTimeout(measure, 400);
+      } else {
+        measure();
+      }
+    });
+    const onResize = () => requestAnimationFrame(measure);
+    window.addEventListener('resize', onResize);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', onResize); };
+  }, [stepIndex, activeTarget]);
+
+  // Early return DUPĂ hook-uri (regulă React)
+  if (!stepData) return null;
+
+  const isAll = stepData.passthrough === 'all';
+  const isTarget = stepData.passthrough === 'target';
+  const hasTasks = stepData.tasks && stepData.tasks.length > 0;
+  const allDone = hasTasks && stepData.tasks.every(t => actions[t.key]);
+
+  const handleNext = () => {
+    if (stepData.isFinal) onClose(true);
+    else onAdvance();
+  };
+
+  // Step dots (shared between modal and spotlight)
+  const dots = (
+    <div style={{ display: 'flex', justifyContent: 'center', gap: '5px', marginTop: '14px' }}>
+      {TUTORIAL_STEPS.map((_, i) => (
+        <div key={i} style={{
+          width: i === stepIndex ? '16px' : '5px', height: '5px', borderRadius: '3px',
+          background: i === stepIndex ? '#c9a962' : i < stepIndex ? '#c9a96266' : '#333',
+          transition: 'all 0.3s ease',
+        }} />
+      ))}
+    </div>
+  );
+
+  // ---- MODAL ----
+  if (stepData.type === 'modal') {
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ background: '#1a1a1a', border: '1px solid #c9a962', borderRadius: '16px', padding: '32px 36px', maxWidth: '440px', width: '90%' }}>
+          <div style={{ fontSize: '20px', fontWeight: 600, color: '#fff', marginBottom: '16px' }}>{stepData.title}</div>
+          <div style={{ fontSize: '14px', color: '#aaa', lineHeight: 1.7, whiteSpace: 'pre-line', marginBottom: '28px' }}>{stepData.text}</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <button onClick={() => onClose(true)} style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer', fontSize: '12px', padding: '8px 0' }}>Închide tutorial</button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {stepIndex > 0 && (
+                <button onClick={onBack} style={{ padding: '10px 18px', background: '#2a2a2a', color: '#888', border: '1px solid #333', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>← Înapoi</button>
+              )}
+              <button onClick={handleNext} style={{ padding: '10px 24px', background: '#c9a962', color: '#0a0a0a', border: 'none', borderRadius: '8px', fontSize: '14px', fontWeight: 600, cursor: 'pointer' }}>{stepData.buttonText}</button>
+            </div>
+          </div>
+          {dots}
+        </div>
+      </div>
+    );
+  }
+
+  // ---- SPOTLIGHT ----
+  let tooltipStyle;
+  if (stepData.fixedTooltip) {
+    const canvasEl = document.querySelector('[data-tutorial="canvas-3d"]');
+    const W = 340;
+    if (canvasEl) {
+      const cr = canvasEl.getBoundingClientRect();
+      if (stepData.fixedTooltip === 'top-right') {
+        tooltipStyle = { position: 'fixed', width: W, zIndex: 10003, top: cr.top + 16, left: cr.right - W - 16 };
+      } else {
+        tooltipStyle = { position: 'fixed', width: W, zIndex: 10003, top: cr.top + 16, left: cr.left + 16 };
+      }
+    } else {
+      tooltipStyle = { position: 'fixed', width: W, zIndex: 10003, top: 80, left: 16 };
+    }
+  } else {
+    tooltipStyle = computeTooltipPos(spotRect, stepData, activePosition);
+  }
+
+  return (
+    <>
+      {/* Dark backdrop with cutout hole for spotlight */}
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.7)',
+        pointerEvents: isAll ? 'none' : 'auto',
+        clipPath: spotRect
+          ? `polygon(evenodd,
+              0 0, 100% 0, 100% 100%, 0 100%, 0 0,
+              ${spotRect.left}px ${spotRect.top}px,
+              ${spotRect.left + spotRect.width}px ${spotRect.top}px,
+              ${spotRect.left + spotRect.width}px ${spotRect.top + spotRect.height}px,
+              ${spotRect.left}px ${spotRect.top + spotRect.height}px,
+              ${spotRect.left}px ${spotRect.top}px
+            )`
+          : undefined,
+      }} onClick={e => { if (!isAll) e.stopPropagation(); }} />
+
+      {/* Pulsing spotlight border */}
+      {spotRect && (
+        <div style={{
+          position: 'fixed', top: spotRect.top, left: spotRect.left, width: spotRect.width, height: spotRect.height,
+          borderRadius: '8px', zIndex: isAll ? 9999 : 10001, pointerEvents: 'none',
+          animation: isAll ? 'tutorialPulseNoBg 2s ease-in-out infinite' : 'tutorialPulse 2s ease-in-out infinite',
+        }} />
+      )}
+
+      {/* Click-through zone for target passthrough */}
+      {isTarget && spotRect && (
+        <div style={{
+          position: 'fixed', top: spotRect.top, left: spotRect.left, width: spotRect.width, height: spotRect.height,
+          zIndex: 10002, pointerEvents: 'auto', cursor: 'pointer', background: 'transparent',
+        }} onClick={() => {
+          const el = document.querySelector(`[data-tutorial="${stepData.target}"]`);
+          if (el) el.click();
+        }} />
+      )}
+
+      {/* Tooltip card */}
+      <div style={{ ...tooltipStyle, background: '#1a1a1a', border: '1px solid #c9a962', borderRadius: '12px', padding: '20px 24px', pointerEvents: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+          <div style={{ fontSize: '15px', fontWeight: 600, color: '#c9a962' }}>{stepData.title}</div>
+          <button onClick={() => onClose(true)} style={{ background: 'transparent', border: 'none', color: '#555', cursor: 'pointer', fontSize: '18px', padding: '0 0 0 12px', lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ fontSize: '13px', color: '#aaa', lineHeight: 1.6, whiteSpace: 'pre-line', marginBottom: '14px' }}>{stepData.text}</div>
+        
+        {hasTasks && (
+          <div style={{ marginBottom: '14px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {stepData.tasks.map(task => {
+              const done = !!actions[task.key];
+              return (
+                <div key={task.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+                  <div style={{
+                    width: '18px', height: '18px', borderRadius: '4px', flexShrink: 0,
+                    border: done ? '2px solid #4a9962' : '2px solid #444',
+                    background: done ? 'rgba(74,153,98,0.15)' : 'transparent',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'border 0.3s, background 0.3s',
+                  }}>
+                    {done && <span style={{ color: '#4a9962', fontSize: '13px', fontWeight: 700 }}>✓</span>}
+                  </div>
+                  <span style={{ color: done ? '#4a9962' : '#888', transition: 'color 0.3s' }}>{task.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={() => onClose(true)} style={{ background: 'transparent', border: 'none', color: '#555', cursor: 'pointer', fontSize: '11px', padding: '4px 0' }}>Închide tutorial</button>
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+            {stepIndex > 0 && (
+              <button onClick={onBack} style={{ padding: '7px 12px', background: '#2a2a2a', color: '#888', border: '1px solid #333', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>← Înapoi</button>
+            )}
+            {hasTasks && !allDone && (
+              <button onClick={handleNext} style={{ padding: '7px 12px', background: 'transparent', color: '#888', border: '1px solid #333', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>
+                Sari peste →
+              </button>
+            )}
+            {(allDone || !hasTasks) && (
+              <button onClick={handleNext} style={{ padding: '8px 16px', background: '#c9a962', color: '#0a0a0a', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                {stepData.buttonText || 'Continuă →'}
+              </button>
+            )}
+          </div>
+        </div>
+        {dots}
+      </div>
+    </>
+  );
+});
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -2212,7 +2613,7 @@ function LoginPage() {
       <div style={{ width: '100%', maxWidth: '380px', padding: '40px', background: '#111', borderRadius: '12px', border: '1px solid #2a2a2a' }}>
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
           <div style={{ fontSize: '32px', fontWeight: 300, color: '#fff' }}>
-            e-blat<span style={{ color: '#c9a962' }}>.ro</span>
+            e-blat<span style={{ color: '#c9a962' }}>.com</span>
           </div>
           <div style={{ fontSize: '14px', color: '#666', marginTop: '8px' }}>Configurator Blaturi 3D</div>
         </div>
@@ -2444,7 +2845,7 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
       {/* Header */}
       <div style={{ padding: '16px 24px', borderBottom: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ fontSize: '20px', fontWeight: 300 }}>
-          e-blat<span style={{ color: '#c9a962' }}>.ro</span>
+          e-blat<span style={{ color: '#c9a962' }}>.com</span>
         </div>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <span style={{ fontSize: '13px', color: '#888' }}>
@@ -3343,7 +3744,7 @@ function MaterialLibrary({ onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <button onClick={onClose} style={{ ...secondaryBtnStyle, padding: '6px 12px', fontSize: '12px' }}>← Înapoi</button>
           <div>
-            <span style={{ fontSize: '18px' }}>e-blat<span style={{ color: '#c9a962' }}>.ro</span></span>
+            <span style={{ fontSize: '18px' }}>e-blat<span style={{ color: '#c9a962' }}>.com</span></span>
             <span style={{ color: '#666', fontSize: '13px', marginLeft: '8px' }}>/ Librărie Materiale</span>
           </div>
           {saveStatus && <span style={{ fontSize: '10px', color: '#4a9' }}>✓ Salvat</span>}
@@ -3511,6 +3912,9 @@ function Configurator({ project, onBack }) {
   const [forceRenderKey, setForceRenderKey] = useState(0); // Force re-render of all meshes
   const [selectedCutoutId, setSelectedCutoutId] = useState(null); // Selected cutout for highlighting
   const [editingCutoutNameId, setEditingCutoutNameId] = useState(null); // Cutout being renamed
+  const [tutorialStep, setTutorialStep] = useState(null); // null = off, 0-8 = active step
+  const tutorialElementCountRef = useRef(0); // Track element count for interactive steps
+  const tutorialStepRef = useRef(null); // Ref mirror of tutorialStep for use in closures
   
   // Track loaded textures to force re-render only when NEW textures finish loading
   const loadedTexturesCountRef = useRef(0);
@@ -3538,7 +3942,24 @@ function Configurator({ project, onBack }) {
       clearInterval(checkInterval);
     };
   }, []);
-  
+
+  // Tutorial: Auto-start on first use (0 elements + never completed)
+  useEffect(() => {
+    if (elements.length === 0 && tutorialStep === null) {
+      const key = `eblat_tutorial_completed_${user?.id || 'local'}`;
+      if (!localStorage.getItem(key)) {
+        // Small delay to let the UI render first
+        const timer = setTimeout(() => setTutorialStep(0), 600);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, []); // Only on mount
+
+  // Keep tutorialStepRef in sync for use in closures (commitElementChanges etc.)
+  useEffect(() => {
+    tutorialStepRef.current = tutorialStep;
+  }, [tutorialStep]);
+
   // Track previous element dimensions to detect changes and invalidate manual positions
   const prevElementDimensionsRef = useRef({});
   
@@ -4047,6 +4468,22 @@ function Configurator({ project, onBack }) {
           window.updateSnapIndicators?.(snapIndicators);
         }
         
+        // Clamp group to work area bounds
+        const WORK_LIMIT = 10;
+        const groupMembers = elements.filter(e => e.groupId === selectedGroupId);
+        let maxExtentX = 0, maxExtentZ = 0;
+        const groupRot = ((pending.rotation || 0)) * Math.PI / 180;
+        groupMembers.forEach(member => {
+          const lx = member.localOffset?.x || 0;
+          const lz = member.localOffset?.z || 0;
+          const wx = Math.abs(lx * Math.cos(groupRot) - lz * Math.sin(groupRot)) + (member.length / 100) / 2;
+          const wz = Math.abs(lx * Math.sin(groupRot) + lz * Math.cos(groupRot)) + (member.type === 'backsplash' ? (member.thickness || 12) / 1000 : member.depth / 100) / 2;
+          maxExtentX = Math.max(maxExtentX, wx);
+          maxExtentZ = Math.max(maxExtentZ, wz);
+        });
+        newX = Math.max(maxExtentX, Math.min(WORK_LIMIT - maxExtentX, newX));
+        newZ = Math.max(maxExtentZ, Math.min(WORK_LIMIT - maxExtentZ, newZ));
+        
         pendingGroupTransforms[selectedGroupId] = { 
           ...pending, 
           position: { x: newX, z: newZ } 
@@ -4245,6 +4682,19 @@ function Configurator({ project, onBack }) {
           }
           
           pendingElementTransforms[elId] = { ...pending, position: { x: newX, z: newZ } };
+          
+          // Clamp to work area bounds (0 to gridSize*2 = 10m)
+          const WORK_LIMIT = 10;
+          const elRot = (pending.rotation || 0) % 360;
+          const isRot90 = Math.abs(elRot % 180 - 90) < 5;
+          let clampW = el.length / 100;
+          let clampD = el.type === 'backsplash' ? (el.thickness || 12) / 1000 : el.depth / 100;
+          if (el.type === 'cabinet') { clampW = (el.width || 60) / 100; clampD = (el.depth || 60) / 100; }
+          if (isRot90) [clampW, clampD] = [clampD, clampW];
+          newX = Math.max(clampW / 2, Math.min(WORK_LIMIT - clampW / 2, newX));
+          newZ = Math.max(clampD / 2, Math.min(WORK_LIMIT - clampD / 2, newZ));
+          pendingElementTransforms[elId].position = { x: newX, z: newZ };
+          
           mesh.position.x = newX;
           mesh.position.z = newZ;
         });
@@ -4396,10 +4846,14 @@ function Configurator({ project, onBack }) {
     // Commit pending changes to React state (called on mouse up)
     window.commitElementChanges = () => {
       let hasChanges = false;
+      let hadPositionChanges = false;
+      let hadRotationChanges = false;
+      let hadGroupChanges = false;
       
       // Commit group transforms
       if (Object.keys(pendingGroupTransforms).length > 0) {
         hasChanges = true;
+        hadGroupChanges = true;
         const groupUpdates = { ...pendingGroupTransforms };
         setGroups(prev => {
           const updated = { ...prev };
@@ -4415,6 +4869,19 @@ function Configurator({ project, onBack }) {
       // Commit element transforms (for ungrouped elements)
       if (Object.keys(pendingElementTransforms).length > 0) {
         hasChanges = true;
+        // Compare pending transforms against current element state to detect actual changes
+        const currentElements = elements; // from closure
+        Object.entries(pendingElementTransforms).forEach(([id, pending]) => {
+          const orig = currentElements.find(e => e.id === id);
+          if (!orig) return;
+          const origPos = orig.position || { x: 0, z: 0 };
+          if (pending.position && (Math.abs(pending.position.x - origPos.x) > 0.001 || Math.abs(pending.position.z - origPos.z) > 0.001)) {
+            hadPositionChanges = true;
+          }
+          if (pending.rotation !== undefined && Math.abs((pending.rotation || 0) - (orig.rotation || 0)) > 0.1) {
+            hadRotationChanges = true;
+          }
+        });
         const elementUpdates = { ...pendingElementTransforms };
         setElements(prev => prev.map(el => {
           const pending = elementUpdates[el.id];
@@ -4434,7 +4901,17 @@ function Configurator({ project, onBack }) {
       pendingElementTransformsRef.current = {};
       rawPositionsRef.current = {};
       rawRotationsRef.current = {};
-      isDraggingRef.current = false; // Allow useEffect to update positions again
+      isDraggingRef.current = false;
+      
+      // Tutorial: detect move/rotate actions
+      if (hasChanges && tutorialStepRef.current !== null) {
+        if (hadPositionChanges || hadGroupChanges) {
+          tutorialMarkAction('moved-element');
+        }
+        if (hadRotationChanges) {
+          tutorialMarkAction('rotated-element');
+        }
+      }
     };
     
     return () => {
@@ -4701,7 +5178,7 @@ function Configurator({ project, onBack }) {
     const handleMouseDown = (e) => {
       prevMouse = { x: e.clientX, y: e.clientY };
       
-      // Middle mouse button (button 1) - orbit or pan
+      // Middle mouse button (button 1) - orbit, or pan with Shift
       if (e.button === 1) {
         e.preventDefault();
         if (e.shiftKey) {
@@ -4712,14 +5189,10 @@ function Configurator({ project, onBack }) {
         return;
       }
       
-      // Right mouse button (button 2) - orbit (touchpad friendly)
+      // Right mouse button (button 2) - pan
       if (e.button === 2) {
         e.preventDefault();
-        if (e.shiftKey) {
-          isDraggingPan = true;
-        } else {
-          isDraggingOrbit = true;
-        }
+        isDraggingPan = true;
         return;
       }
       
@@ -4728,11 +5201,7 @@ function Configurator({ project, onBack }) {
         // Alt + left click = orbit (touchpad friendly alternative)
         if (e.altKey) {
           e.preventDefault();
-          if (e.shiftKey) {
-            isDraggingPan = true;
-          } else {
-            isDraggingOrbit = true;
-          }
+          isDraggingOrbit = true;
           return;
         }
         
@@ -4868,6 +5337,7 @@ function Configurator({ project, onBack }) {
         orbitRef.current.phi = Math.max(0.1, Math.min(Math.PI - 0.1, orbitRef.current.phi - dy * 0.005));  // Reversed Y
         prevMouse = { x: e.clientX, y: e.clientY };
         updateCamera();
+        tutorialMarkAction('orbited-camera');
       } else if (isDraggingPan) {
         // Pan camera target based on camera's right and forward vectors
         const panSpeed = 0.002 * orbitRef.current.radius;
@@ -4892,6 +5362,7 @@ function Configurator({ project, onBack }) {
         
         prevMouse = { x: e.clientX, y: e.clientY };
         updateCamera();
+        tutorialMarkAction('panned-camera');
       } else if (isDraggingElement && draggedElementId && dragStartPos) {
         const currentPos = getPlaneIntersection(e);
         const delta = {
@@ -4918,6 +5389,7 @@ function Configurator({ project, onBack }) {
         // Pinch to zoom on touchpad (ctrlKey is set during pinch gesture)
         orbitRef.current.radius = Math.max(2, Math.min(20, orbitRef.current.radius + e.deltaY * 0.02));
         updateCamera();
+        tutorialMarkAction('zoomed-camera');
       } else if (isTouchpad && Math.abs(e.deltaX) > 0) {
         // Two-finger pan on touchpad
         const panSpeed = 0.005 * orbitRef.current.radius;
@@ -4939,6 +5411,7 @@ function Configurator({ project, onBack }) {
         // Regular mouse wheel - zoom
         orbitRef.current.radius = Math.max(2, Math.min(20, orbitRef.current.radius + e.deltaY * 0.01));
         updateCamera();
+        tutorialMarkAction('zoomed-camera');
       }
     };
     
@@ -5923,6 +6396,22 @@ function Configurator({ project, onBack }) {
   };
 
   const updateElement = (id, updates) => {
+    // Tutorial: detect relevant actions
+    if (tutorialStep !== null) {
+      if (updates.length !== undefined || updates.depth !== undefined || updates.height !== undefined) {
+        tutorialMarkAction('changed-dimension');
+      }
+      if (updates.cutouts && updates.cutouts.length > 0) {
+        const el = elements.find(e => e.id === id);
+        if (el && (!el.cutouts || updates.cutouts.length > el.cutouts.length)) {
+          tutorialMarkAction('added-cutout');
+        }
+      }
+      if (updates.rotation !== undefined) {
+        tutorialMarkAction('rotated-element');
+      }
+    }
+    
     setElements(elements.map(el => {
       if (el.id !== id) return el;
       
@@ -6079,6 +6568,7 @@ function Configurator({ project, onBack }) {
     
     setGroups(newGroups);
     setElements(updatedElements);
+    tutorialMarkAction('ungrouped');
   };
 
   // Get geometric center of selected elements (using world positions)
@@ -6322,13 +6812,21 @@ function Configurator({ project, onBack }) {
   }, [selectedIds, snapEnabled, elements, copySelected, pasteClipboard]);
 
   const toolBtnStyle = (active) => ({
-    padding: '6px 12px',
-    background: active ? 'rgba(201,169,98,0.2)' : '#1a1a1a',
-    border: active ? '1px solid #c9a962' : '1px solid #2a2a2a',
-    color: active ? '#c9a962' : '#888',
+    height: '32px',
+    padding: '0 10px',
+    background: active ? 'rgba(201,169,98,0.15)' : '#111',
+    border: active ? '1px solid #c9a962' : '1px solid #262626',
+    color: active ? '#c9a962' : '#999',
     cursor: 'pointer',
     fontSize: '11px',
-    borderRadius: '4px',
+    borderRadius: '6px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '5px',
+    whiteSpace: 'nowrap',
+    fontFamily: 'system-ui',
+    lineHeight: 1,
+    transition: 'all 0.15s ease',
   });
 
   // ============================================
@@ -6490,132 +6988,157 @@ function Configurator({ project, onBack }) {
     input.click();
   };
 
+  // ============================================
+  // TUTORIAL - state & callbacks (component is defined at module level)
+  // ============================================
+  
+  const [tutorialActions, setTutorialActions] = useState({});
+  
+  const tutorialMarkAction = useCallback((action) => {
+    setTutorialActions(prev => {
+      if (prev[action]) return prev;
+      return { ...prev, [action]: true };
+    });
+  }, []);
+
+  const closeTutorial = useCallback((markComplete = true) => {
+    setTutorialStep(null);
+    setTutorialActions({});
+    if (markComplete) {
+      const key = `eblat_tutorial_completed_${user?.id || 'local'}`;
+      localStorage.setItem(key, 'true');
+    }
+  }, [user?.id]);
+
+  const advanceTutorial = useCallback(() => {
+    setTutorialStep(prev => {
+      if (prev === null) return null;
+      if (prev >= TUTORIAL_STEPS.length - 1) return null;
+      return prev + 1;
+    });
+  }, []);
+
+  const goBackTutorial = useCallback(() => {
+    setTutorialStep(prev => {
+      if (prev === null || prev <= 0) return prev;
+      return prev - 1;
+    });
+  }, []);
+
+  // Tutorial: Detect element additions
+  useEffect(() => {
+    if (tutorialStepRef.current === null) return;
+    const prevCount = tutorialElementCountRef.current;
+    if (elements.length > prevCount) {
+      const newest = elements[elements.length - 1];
+      if (newest?.type === 'island') tutorialMarkAction('added-blat');
+      if (newest?.type === 'backsplash') tutorialMarkAction('added-contrablat');
+    }
+    tutorialElementCountRef.current = elements.length;
+  }, [elements.length, tutorialMarkAction]);
+
+  // Tutorial: Detect blat selection (for cutout step)
+  // Also re-check when tutorial step changes (blat might already be selected)
+  useEffect(() => {
+    if (tutorialStepRef.current === null) return;
+    if (selectedIds.length > 0) {
+      const selectedEl = elements.find(e => e.id === selectedIds[0]);
+      if (selectedEl?.type === 'island') {
+        tutorialMarkAction('selected-blat');
+      }
+    }
+    // Detectează selecție multiplă (2+ elemente)
+    if (selectedIds.length >= 2) {
+      tutorialMarkAction('multi-selected');
+    }
+  }, [selectedIds, elements, tutorialMarkAction, tutorialStep]);
+
+  // Tutorial: Detectează crearea unui grup
+  useEffect(() => {
+    if (tutorialStepRef.current === null) return;
+    if (groups && Object.keys(groups).length > 0) {
+      tutorialMarkAction('created-group');
+    }
+  }, [groups, tutorialMarkAction]);
+
   return (
     <div style={{ height: '100vh', background: '#0a0a0a', color: '#fff', fontFamily: 'system-ui', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
-      <div style={{ padding: '8px 16px', borderBottom: '1px solid #2a2a2a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <button onClick={onBack} style={{ ...secondaryBtnStyle, padding: '6px 12px', fontSize: '12px' }}>← Proiecte</button>
-          <div>
-            <span style={{ fontSize: '16px' }}>e-blat<span style={{ color: '#c9a962' }}>.ro</span></span>
-            <span style={{ color: '#666', fontSize: '13px', marginLeft: '8px' }}>/ {project.name}</span>
-          </div>
-          {saveStatus && <span style={{ fontSize: '10px', color: '#4a9', marginLeft: '8px' }}>✓ Salvat</span>}
-          <div style={{ width: '1px', height: '20px', background: '#333' }} />
-          <button 
-            onClick={() => setDebugTexture(!debugTexture)} 
-            style={{ 
-              ...toolBtnStyle(debugTexture), 
-              background: debugTexture ? 'rgba(147,112,219,0.2)' : '#1a1a1a', 
-              borderColor: debugTexture ? '#9370db' : '#2a2a2a', 
-              color: debugTexture ? '#9370db' : '#666',
-              fontSize: '11px',
-              padding: '4px 8px'
-            }}
-            title="Afișează textura completă pe piese selectate pentru a vedea încadrarea"
-          >
-            🔍 Vezi Încadrarea {debugTexture ? 'ON' : 'OFF'}
-          </button>
-          <div style={{ width: '1px', height: '20px', background: '#333' }} />
-          <button 
-            onClick={exportConfig}
-            style={{ 
-              ...toolBtnStyle(false),
-              fontSize: '11px',
-              padding: '4px 8px'
-            }}
-            title="Exportă configurația ca fișier JSON"
-          >
-            💾 Export
-          </button>
-          <button 
-            onClick={importConfig}
-            style={{ 
-              ...toolBtnStyle(false),
-              fontSize: '11px',
-              padding: '4px 8px'
-            }}
-            title="Importă configurație din fișier JSON"
-          >
-            📂 Import
-          </button>
+      <div style={{ padding: '6px 12px', borderBottom: '1px solid #222', background: '#0d0d0d', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* Logo & Navigation */}
+        <button onClick={onBack} style={{ ...toolBtnStyle(false), color: '#666' }}>← Proiecte</button>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginRight: '4px' }}>
+          <span style={{ fontSize: '14px', fontWeight: 600 }}>e-blat<span style={{ color: '#c9a962' }}>.com</span></span>
+          <span style={{ color: '#555', fontSize: '12px' }}>/ {project.name}</span>
+          {saveStatus && <span style={{ fontSize: '10px', color: '#4a9' }}>✓</span>}
         </div>
 
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <div style={{ display: 'flex', gap: '4px' }}>
-            <button onClick={() => setTool('select')} style={toolBtnStyle(tool === 'select')}>↖ Select</button>
-            <button onClick={() => setTool('move')} style={toolBtnStyle(tool === 'move')}>✥ Move</button>
-            <button onClick={() => setTool('rotate')} style={toolBtnStyle(tool === 'rotate')}>↻ Rotate</button>
-          </div>
-          <div style={{ width: '1px', height: '20px', background: '#333' }} />
-          <button 
-            onClick={groupSelected} 
-            disabled={selectedIds.length < 2}
-            style={{ 
-              ...toolBtnStyle(false), 
-              opacity: selectedIds.length < 2 ? 0.4 : 1,
-              cursor: selectedIds.length < 2 ? 'not-allowed' : 'pointer'
-            }}
-            title="Group (Ctrl+G)"
-          >
-            ⊞ Group
-          </button>
-          <button 
-            onClick={ungroupSelected} 
-            disabled={!elements.some(el => selectedIds.includes(el.id) && el.groupId)}
-            style={{ 
-              ...toolBtnStyle(false), 
-              opacity: !elements.some(el => selectedIds.includes(el.id) && el.groupId) ? 0.4 : 1,
-              cursor: !elements.some(el => selectedIds.includes(el.id) && el.groupId) ? 'not-allowed' : 'pointer'
-            }}
-            title="Ungroup (Ctrl+X)"
-          >
-            ⊟ Ungroup
-          </button>
-          <div style={{ width: '1px', height: '20px', background: '#333' }} />
-          <button onClick={() => setSnapEnabled(!snapEnabled)} style={{ ...toolBtnStyle(snapEnabled), background: snapEnabled ? 'rgba(74,153,74,0.2)' : '#1a1a1a', borderColor: snapEnabled ? '#4a9' : '#2a2a2a', color: snapEnabled ? '#4a9' : '#666' }}>
-            ⊞ Snap {snapEnabled ? 'ON' : 'OFF'}
-          </button>
-          {snapEnabled && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <select 
-                value={snapThreshold} 
-                onChange={e => setSnapThreshold(Number(e.target.value))}
-                style={{
-                  background: '#1a1a1a',
-                  border: '1px solid #333',
-                  color: '#4a9',
-                  fontSize: '11px',
-                  padding: '4px 6px',
-                  borderRadius: '4px',
-                  cursor: 'pointer'
-                }}
-                title="Snap threshold (cm)"
-              >
-                <option value={5}>5cm</option>
-                <option value={10}>10cm</option>
-                <option value={15}>15cm</option>
-                <option value={20}>20cm</option>
-                <option value={25}>25cm</option>
-                <option value={50}>50cm</option>
-              </select>
-            </div>
-          )}
-          <button 
-            onClick={undo} 
-            disabled={undoHistory.length === 0}
-            style={{ 
-              ...toolBtnStyle(false), 
-              opacity: undoHistory.length === 0 ? 0.4 : 1,
-              cursor: undoHistory.length === 0 ? 'not-allowed' : 'pointer'
-            }}
-            title="Undo (Ctrl+Z)"
-          >
-            ↩ Undo
-          </button>
+        <div style={{ width: '1px', height: '20px', background: '#262626' }} />
+
+        {/* View Tools */}
+        <button onClick={() => setDebugTexture(!debugTexture)} style={{ ...toolBtnStyle(debugTexture), background: debugTexture ? 'rgba(147,112,219,0.15)' : '#111', borderColor: debugTexture ? '#9370db' : '#262626', color: debugTexture ? '#9370db' : '#999' }} title="Afișează textura completă pe piese selectate">
+          🔍 Încadrare {debugTexture ? 'ON' : 'OFF'}
+        </button>
+
+        <div style={{ width: '1px', height: '20px', background: '#262626' }} />
+
+        {/* File Operations */}
+        <button onClick={exportConfig} style={toolBtnStyle(false)} title="Exportă configurația ca fișier JSON">💾 Export</button>
+        <button onClick={importConfig} style={toolBtnStyle(false)} title="Importă configurație din fișier JSON">📂 Import</button>
+
+        <div style={{ flex: 1 }} />
+
+        {/* Transform Tools */}
+        <div style={{ display: 'flex', gap: '3px' }}>
+          <button onClick={() => setTool('select')} style={{ ...toolBtnStyle(tool === 'select'), borderRadius: '6px 0 0 6px' }}>↖ Select</button>
+          <button onClick={() => setTool('move')} style={{ ...toolBtnStyle(tool === 'move'), borderRadius: 0 }}>✥ Move</button>
+          <button onClick={() => setTool('rotate')} style={{ ...toolBtnStyle(tool === 'rotate'), borderRadius: '0 6px 6px 0' }}>↻ Rotate</button>
         </div>
 
-        <div style={{ fontSize: '10px', color: '#555' }}>G=Move R=Rotate D=Dup Del=Șterge | Ctrl+Click=Adaugă Shift+Click=Elimină | Ctrl+G=Group Ctrl+X=Ungroup</div>
+        <div style={{ width: '1px', height: '20px', background: '#262626' }} />
+
+        {/* Grouping */}
+        <button onClick={groupSelected} disabled={selectedIds.length < 2} style={{ ...toolBtnStyle(false), opacity: selectedIds.length < 2 ? 0.35 : 1, cursor: selectedIds.length < 2 ? 'default' : 'pointer' }} title="Group (Ctrl+G)">⊞ Group</button>
+        <button onClick={ungroupSelected} disabled={!elements.some(el => selectedIds.includes(el.id) && el.groupId)} style={{ ...toolBtnStyle(false), opacity: !elements.some(el => selectedIds.includes(el.id) && el.groupId) ? 0.35 : 1, cursor: !elements.some(el => selectedIds.includes(el.id) && el.groupId) ? 'default' : 'pointer' }} title="Ungroup (Ctrl+X)">⊟ Ungroup</button>
+
+        <div style={{ width: '1px', height: '20px', background: '#262626' }} />
+
+        {/* Snap */}
+        <button onClick={() => setSnapEnabled(!snapEnabled)} style={{ ...toolBtnStyle(snapEnabled), background: snapEnabled ? 'rgba(74,153,74,0.12)' : '#111', borderColor: snapEnabled ? '#4a9' : '#262626', color: snapEnabled ? '#4a9' : '#999' }}>
+          ⊞ Snap {snapEnabled ? 'ON' : 'OFF'}
+        </button>
+        {snapEnabled && (
+          <select 
+            value={snapThreshold} 
+            onChange={e => setSnapThreshold(Number(e.target.value))}
+            style={{ height: '32px', background: '#111', border: '1px solid #262626', color: '#4a9', fontSize: '11px', padding: '0 6px', borderRadius: '6px', cursor: 'pointer' }}
+            title="Snap threshold"
+          >
+            <option value={5}>5cm</option>
+            <option value={10}>10cm</option>
+            <option value={15}>15cm</option>
+            <option value={20}>20cm</option>
+            <option value={25}>25cm</option>
+            <option value={50}>50cm</option>
+          </select>
+        )}
+
+        <div style={{ width: '1px', height: '20px', background: '#262626' }} />
+
+        {/* Undo */}
+        <button onClick={undo} disabled={undoHistory.length === 0} style={{ ...toolBtnStyle(false), opacity: undoHistory.length === 0 ? 0.35 : 1, cursor: undoHistory.length === 0 ? 'default' : 'pointer' }} title="Undo (Ctrl+Z)">↩ Undo</button>
+
+        <div style={{ width: '1px', height: '20px', background: '#262626' }} />
+
+        {/* Shortcuts hint & Tutorial */}
+        <div style={{ fontSize: '9px', color: '#444', lineHeight: 1.4, maxWidth: '200px' }}>G=Move R=Rotate D=Dup Del=Șterge<br/>Ctrl+Click=Adaugă Ctrl+G=Group</div>
+        <button 
+          onClick={() => { tutorialElementCountRef.current = elements.length; setTutorialStep(0); }}
+          style={toolBtnStyle(false)}
+          title="Pornește tutorial-ul"
+        >
+          ❓ Tutorial
+        </button>
       </div>
 
       {/* Material Warnings Banner */}
@@ -6664,8 +7187,8 @@ function Configurator({ project, onBack }) {
           <div style={{ padding: '12px', borderBottom: '1px solid #2a2a2a' }}>
             <div style={{ fontSize: '10px', color: '#888', marginBottom: '8px' }}>ADAUGĂ ELEMENT</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <button onClick={() => addElement('island')} style={{ padding: '8px', background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', cursor: 'pointer', fontSize: '11px', textAlign: 'left', borderRadius: '4px' }}>+ Blat</button>
-              <button onClick={() => addElement('backsplash')} style={{ padding: '8px', background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', cursor: 'pointer', fontSize: '11px', textAlign: 'left', borderRadius: '4px' }}>+ Contrablat</button>
+              <button data-tutorial="add-blat" onClick={() => addElement('island')} style={{ padding: '8px', background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', cursor: 'pointer', fontSize: '11px', textAlign: 'left', borderRadius: '4px' }}>+ Blat</button>
+              <button data-tutorial="add-contrablat" onClick={() => addElement('backsplash')} style={{ padding: '8px', background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#fff', cursor: 'pointer', fontSize: '11px', textAlign: 'left', borderRadius: '4px' }}>+ Contrablat</button>
               <button onClick={() => addElement('cabinet')} style={{ padding: '8px', background: '#1a1a1a', border: '1px solid #2a2a2a', color: '#888', cursor: 'pointer', fontSize: '11px', textAlign: 'left', borderRadius: '4px' }}>+ Corp mobilier</button>
             </div>
           </div>
@@ -6771,7 +7294,7 @@ function Configurator({ project, onBack }) {
         </div>
 
         {/* Center - 3D View */}
-        <div style={{ flex: 1, position: 'relative', background: '#111', minWidth: 0 }}>
+        <div data-tutorial="canvas-3d" style={{ flex: 1, position: 'relative', background: '#111', minWidth: 0 }}>
           <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
           
           {/* Marquee Selection Rectangle */}
@@ -6829,15 +7352,15 @@ function Configurator({ project, onBack }) {
           )}
           <div style={{ position: 'absolute', bottom: '10px', left: '50%', transform: 'translateX(-50%)', fontSize: '10px', color: '#555', background: 'rgba(0,0,0,0.7)', padding: '6px 12px', borderRadius: '4px' }}>
             {tool === 'move' 
-              ? '🖱️ Click + Drag = Mută • Right-click/Alt+Drag = Orbit • Shift = Pan • Scroll = Zoom' 
+              ? '🖱️ Click + Drag = Mută • Middle-click/Alt = Orbit • Right-click = Pan • Scroll = Zoom' 
               : tool === 'rotate'
-              ? '🖱️ Click + Drag = Rotește • Right-click/Alt+Drag = Orbit • Shift = Pan • Scroll = Zoom'
-              : '🖱️ Click = Selectează • Right-click/Alt+Drag = Orbit • Shift = Pan • Scroll/Pinch = Zoom'}
+              ? '🖱️ Click + Drag = Rotește • Middle-click/Alt = Orbit • Right-click = Pan • Scroll = Zoom'
+              : '🖱️ Click = Selectează • Middle-click/Alt = Orbit • Right-click = Pan • Scroll/Pinch = Zoom'}
           </div>
         </div>
 
         {/* Right Panel - Properties */}
-        <div style={{ width: '300px', borderLeft: '1px solid #2a2a2a', overflow: 'auto', flexShrink: 0 }}>
+        <div data-tutorial="properties-panel" style={{ width: '300px', borderLeft: '1px solid #2a2a2a', overflow: 'auto', flexShrink: 0 }}>
           {selectedIds.length > 1 ? (
             // Multi-select panel
             <div style={{ padding: '12px' }}>
@@ -7535,7 +8058,7 @@ function Configurator({ project, onBack }) {
               </div>
 
               {/* Cutouts Section */}
-              <div style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
+              <div data-tutorial="cutouts-section" style={{ marginBottom: '16px', padding: '12px', background: '#111', borderRadius: '6px', border: '1px solid #2a2a2a' }}>
                 <div style={{ fontSize: '10px', color: '#c9a962', marginBottom: '10px', fontWeight: 600 }}>✂️ DECUPAJE</div>
                 
                 {/* Add Cutout Dropdown */}
@@ -7941,6 +8464,7 @@ function Configurator({ project, onBack }) {
       )}
       
       {/* Footer - Bin Packing / Slab Calculator */}
+      <div data-tutorial="footer">
       <SlabCalculatorFooter 
         elements={elements} 
         library={library} 
@@ -7957,6 +8481,16 @@ function Configurator({ project, onBack }) {
         setSelectedCutoutId={setSelectedCutoutId}
         exportGLB={exportGLB}
       />
+      </div>
+
+      {/* Tutorial Overlay */}
+      {tutorialStep !== null && <TutorialOverlay 
+        step={tutorialStep} 
+        actions={tutorialActions} 
+        onClose={closeTutorial} 
+        onAdvance={advanceTutorial}
+        onBack={goBackTutorial}
+      />}
     </div>
   );
 }
@@ -10104,7 +10638,7 @@ function AppContent({ currentView, setCurrentView, currentProject, setCurrentPro
     return (
       <div style={{ minHeight: '100vh', background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#888', fontFamily: 'system-ui' }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '24px', marginBottom: '12px' }}>e-blat<span style={{ color: '#c9a962' }}>.ro</span></div>
+          <div style={{ fontSize: '24px', marginBottom: '12px' }}>e-blat<span style={{ color: '#c9a962' }}>.com</span></div>
           <div>Se încarcă...</div>
         </div>
       </div>
