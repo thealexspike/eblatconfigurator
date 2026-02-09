@@ -6209,7 +6209,7 @@ function Configurator({ project, onBack }) {
             const inductionMat = new THREE.MeshBasicMaterial({ 
               color: isIndSelected ? 0xc97a32 : 0x222222,
               transparent: true, opacity: isIndSelected ? 0.5 : 0.3,
-              depthTest: true, side: THREE.DoubleSide,
+              depthTest: false, side: THREE.DoubleSide,
             });
             const indMesh = new THREE.Mesh(indGeo, inductionMat);
             indMesh.renderOrder = 500;
@@ -6219,7 +6219,7 @@ function Configurator({ project, onBack }) {
             const edges = new THREE.EdgesGeometry(indGeo, 15);
             const edgeMat = new THREE.LineBasicMaterial({ 
               color: isIndSelected ? 0xc97a32 : 0x555555,
-              depthTest: true, transparent: true, opacity: isIndSelected ? 1 : 0.6,
+              depthTest: false, transparent: true, opacity: isIndSelected ? 1 : 0.6,
             });
             const edgeLines = new THREE.LineSegments(edges, edgeMat);
             edgeLines.renderOrder = 501;
@@ -6228,7 +6228,7 @@ function Configurator({ project, onBack }) {
             indMesh.add(edgeLines);
             if (isIndSelected) {
               const glowEdges = new THREE.EdgesGeometry(indGeo, 15);
-              const glowMat = new THREE.LineBasicMaterial({ color: 0xc97a32, depthTest: true, transparent: true, opacity: 0.4 });
+              const glowMat = new THREE.LineBasicMaterial({ color: 0xc97a32, depthTest: false, transparent: true, opacity: 0.4 });
               const glowLines = new THREE.LineSegments(glowEdges, glowMat);
               glowLines.renderOrder = 502;
               glowLines.raycast = () => {};
@@ -6655,7 +6655,7 @@ function Configurator({ project, onBack }) {
             color: isSelected ? 0xc97a32 : 0x222222,
             transparent: true, 
             opacity: isSelected ? 0.5 : 0.3,
-            depthTest: true,
+            depthTest: false,
             side: THREE.DoubleSide,
           });
           const indMesh = new THREE.Mesh(indGeo, inductionMat);
@@ -6675,7 +6675,7 @@ function Configurator({ project, onBack }) {
           const edgeMat = new THREE.LineBasicMaterial({ 
             color: isSelected ? 0xc97a32 : 0x555555,
             linewidth: isSelected ? 2 : 1,
-            depthTest: true,
+            depthTest: false,
             transparent: true,
             opacity: isSelected ? 1 : 0.6,
           });
@@ -6688,7 +6688,7 @@ function Configurator({ project, onBack }) {
           if (isSelected) {
             const glowEdges = new THREE.EdgesGeometry(indGeo, 15);
             const glowMat = new THREE.LineBasicMaterial({ 
-              color: 0xc97a32, linewidth: 3, depthTest: true, transparent: true, opacity: 0.4
+              color: 0xc97a32, linewidth: 3, depthTest: false, transparent: true, opacity: 0.4
             });
             const glowLines = new THREE.LineSegments(glowEdges, glowMat);
             glowLines.renderOrder = 502;
