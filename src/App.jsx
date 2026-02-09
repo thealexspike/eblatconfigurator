@@ -10802,6 +10802,7 @@ EOF
                                           if (shouldHighlight) {
                                             e.stopPropagation();
                                             setSelectedCutoutId(cutout.id);
+                                            setSelectedInductionId(null);
                                           }
                                         }}
                                         style={{
@@ -10851,6 +10852,7 @@ EOF
                                           if (shouldHighlight) {
                                             e.stopPropagation();
                                             setSelectedCutoutId(cutout.id);
+                                            setSelectedInductionId(null);
                                           }
                                         }}
                                         style={{
