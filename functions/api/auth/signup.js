@@ -3,8 +3,7 @@ import {
   normalizeEmail, validCredentials, nowIso, publicUser,
 } from '../../_shared/auth.js';
 
-// POST /api/auth/signup — înregistrare publică; contul nou nu este niciodată
-// administrator (emailul nu se verifică, deci domeniul lui nu dovedește nimic).
+// POST /api/auth/signup — înregistrare publică. Emailul nu se verifică.
 export async function onRequestPost(context) {
   const { env } = context;
   const body = await readJson(context.request);

@@ -114,6 +114,11 @@ export async function getUserFromRequest(db, request) {
   return row ? publicUser(row) : null;
 }
 
+// Administratorii editează librăria de materiale: orice cont cu email pe unul
+// dintre domeniile firmei, plus conturile cu is_admin = 1 în D1.
+const ADMIN_DOMAINS = ['nettmobel.ro', 'atelierazimut.com', 'e-blat.com'];
+const isAdminEmail = (email) => ADMIN_DOMAINS.includes(String(email).split('@').pop());
+
 // Forma în care un cont pleacă spre browser
 export function publicUser(row) {
   return {
@@ -121,7 +126,7 @@ export function publicUser(row) {
     email: row.email,
     name: row.name || row.email.split('@')[0],
     phone: row.phone || null,
-    isAdmin: row.is_admin === 1,
+    isAdmin: row.is_admin === 1 || isAdminEmail(row.email),
   };
 }
 

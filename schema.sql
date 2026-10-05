@@ -7,9 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   name TEXT,
   phone TEXT,
-  -- administratorii editează librăria de materiale; steagul se pune manual
-  -- în D1 (UPDATE users SET is_admin = 1 WHERE email = ...), nu se deduce
-  -- din domeniul emailului
+  -- administrator în plus față de domeniile firmei (vezi functions/_shared/auth.js)
   is_admin INTEGER NOT NULL DEFAULT 0,
   password_hash TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
