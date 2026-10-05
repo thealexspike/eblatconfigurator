@@ -3,17 +3,20 @@
   "private": true,
   "scripts": {
     "dev": "vite",
+    "dev:api": "vite build && wrangler pages dev dist --port 8788",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "db:local": "wrangler d1 execute eblat-configurator-db --local --file schema.sql",
+    "db:remote": "wrangler d1 execute eblat-configurator-db --remote --file schema.sql"
   },
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "three": "^0.160.0",
-    "@supabase/supabase-js": "^2.39.0"
+    "three": "^0.160.0"
   },
   "devDependencies": {
     "vite": "^5.0.0",
-    "@vitejs/plugin-react": "^4.2.0"
+    "@vitejs/plugin-react": "^4.2.0",
+    "wrangler": "^4.0.0"
   }
 }

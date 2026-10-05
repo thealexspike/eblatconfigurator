@@ -1,0 +1,14 @@
+name = "configurator"
+compatibility_date = "2026-09-01"
+pages_build_output_dir = "dist"
+
+# Conturi, proiecte și librăria de materiale
+[[d1_databases]]
+binding = "DB"
+database_name = "eblat-configurator-db"
+database_id = "c910c355-e871-49ef-a379-ea9e81138f3c"
+
+# Texturile materialelor (textures/<fișier>)
+[[kv_namespaces]]
+binding = "FILES"
+id = "6291429e1bd04a3fa3bc33fa36768741"

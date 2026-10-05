@@ -1,7 +1,6 @@
 import React, { useState, useEffect, createContext, useContext, useRef, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import { createClient } from '@supabase/supabase-js';
 
 // ============================================
 // GLOBAL HELPER FUNCTIONS
@@ -2461,24 +2460,33 @@ const saveProjects = (userId, projects) => {
 };
 
 // ============================================
-// SUPABASE CONFIG
+// API (Cloudflare Pages Functions, /api/*)
 // ============================================
 
-// Supabase configuration
-const SUPABASE_URL = 'https://zokrapacoywipmmincuh.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpva3JhcGFjb3l3aXBtbWluY3VoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg5MjMwNTEsImV4cCI6MjA4NDQ5OTA1MX0.EEtrMG8L1yj-nyj7U0dy9g68zjhlE7qCc4m5866n48Y';
-
-// Initialize Supabase client
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-// Check if user is admin - any @e-blat.com email is admin, or user_metadata.isAdmin, or profile.is_admin
-const isAdminEmail = (email) => {
-  if (!email) return false;
-  return email.endsWith('@e-blat.com') || email.endsWith('@atelierazimut.com');
+// Sesiunea stă într-un cookie HttpOnly pus de server; aici nu se ține niciun token.
+const api = async (path, { method = 'GET', body, file } = {}) => {
+  const res = await fetch(`/api${path}`, {
+    method,
+    credentials: 'same-origin',
+    headers: file ? { 'Content-Type': file.type } : body ? { 'Content-Type': 'application/json' } : undefined,
+    body: file || (body ? JSON.stringify(body) : undefined),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error || `Eroare de server (${res.status})`);
+  return data;
 };
 
+// Rândul librăriei de pe server → forma din aplicație
+const libraryFromServer = (data) => ({
+  materialTypes: data.material_types || DEFAULT_LIBRARY.materialTypes,
+  manufacturers: data.manufacturers || DEFAULT_LIBRARY.manufacturers,
+  colors: data.colors || DEFAULT_LIBRARY.colors,
+  formats: data.formats || DEFAULT_LIBRARY.formats,
+  inductionSystems: data.induction_systems || DEFAULT_LIBRARY.inductionSystems,
+});
+
 // ============================================
-// AUTH SYSTEM (Supabase)
+// AUTH SYSTEM
 // ============================================
 
 const AuthContext = createContext(null);
@@ -2487,146 +2495,50 @@ function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Transform Supabase user to app user format
-  const transformUser = (supabaseUser, profile = null) => {
-    if (!supabaseUser) return null;
-    return {
-      id: supabaseUser.id,
-      email: supabaseUser.email,
-      name: profile?.name || supabaseUser.user_metadata?.name || supabaseUser.email?.split('@')[0],
-      phone: profile?.phone || supabaseUser.user_metadata?.phone || null,
-      isAdmin: isAdminEmail(supabaseUser.email) || 
-               supabaseUser.user_metadata?.isAdmin === true || 
-               profile?.is_admin === true,
-    };
-  };
-
-  // Fetch user profile from profiles table
-  const fetchProfile = async (userId) => {
-    try {
-      const { data } = await supabase
-        .from('profiles')
-        .select('name, phone, is_admin')
-        .eq('id', userId)
-        .single();
-      return data;
-    } catch (e) {
-      return null;
-    }
-  };
-
   useEffect(() => {
-    // Timeout to prevent infinite loading
-    const timeout = setTimeout(() => {
-      console.log('Session timeout - no session found');
-      setLoading(false);
-    }, 5000);
-
-    // Get initial session
-    console.log('Checking for existing session...');
-    supabase.auth.getSession()
-      .then(async ({ data: { session } }) => {
-        clearTimeout(timeout);
-        console.log('Session check result:', session ? 'Found session' : 'No session');
-        if (session?.user) {
-          console.log('User found:', session.user.email);
-          const profile = await fetchProfile(session.user.id);
-          setUser(transformUser(session.user, profile));
-        }
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error('Session error:', err);
-        clearTimeout(timeout);
-        setLoading(false);
-      });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('Auth state changed:', event, session?.user?.email);
-      if (session?.user) {
-        console.log('Setting user from auth change...');
-        // Set user immediately without waiting for profile
-        const basicUser = transformUser(session.user, null);
-        setUser(basicUser);
-        setLoading(false);
-        clearTimeout(timeout);
-        
-        // Then fetch profile in background
-        fetchProfile(session.user.id).then(profile => {
-          if (profile) {
-            setUser(transformUser(session.user, profile));
-          }
-        });
-      } else {
-        setUser(null);
-      }
-    });
-
-    return () => {
-      clearTimeout(timeout);
-      subscription.unsubscribe();
-    };
+    api('/auth/me')
+      .then(({ user }) => setUser(user))
+      .catch((err) => console.error('Session error:', err))
+      .finally(() => setLoading(false));
   }, []);
 
   const signIn = async (email, password) => {
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      
-      if (error) {
-        console.error('Login error:', error);
-        return { user: null, error: error.message };
-      }
-      
-      if (data.user) {
-        const profile = await fetchProfile(data.user.id);
-        const appUser = transformUser(data.user, profile);
-        setUser(appUser);
-        return { user: appUser, error: null };
-      }
-      
-      return { user: null, error: 'Eroare la autentificare' };
+      const { user } = await api('/auth/login', { method: 'POST', body: { email, password } });
+      setUser(user);
+      return { user, error: null };
     } catch (err) {
-      console.error('Login exception:', err);
+      console.error('Login error:', err);
       return { user: null, error: err.message };
     }
   };
 
   const signUp = async (email, password, name) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { name }
-      }
-    });
-    
-    if (error) {
-      return { user: null, error: error.message };
+    try {
+      const { user } = await api('/auth/signup', { method: 'POST', body: { email, password, name } });
+      setUser(user);
+      return { user, error: null };
+    } catch (err) {
+      return { user: null, error: err.message };
     }
-    
-    // Create profile entry
-    if (data.user) {
-      await supabase.from('profiles').upsert({
-        id: data.user.id,
-        name: name,
-        is_admin: isAdminEmail(email),
-      });
-    }
-    
-    return { user: data.user, error: null };
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    try {
+      await api('/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
     setUser(null);
   };
 
+  const updatePhone = async (phone) => {
+    const { user } = await api('/auth/me', { method: 'PATCH', body: { phone } });
+    setUser(user);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut, supabase }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut, updatePhone }}>
       {children}
     </AuthContext.Provider>
   );
@@ -2677,8 +2589,7 @@ function LoginPage() {
     if (error) {
       setError(error);
     } else {
-      setSuccess('Cont creat cu succes! Verifică email-ul pentru confirmare.');
-      setMode('login');
+      setSuccess('Cont creat cu succes!');
     }
     setLoading(false);
   };
@@ -2802,7 +2713,7 @@ function LoginPage() {
 // ============================================
 
 function ProjectsPage({ onSelectProject, onOpenLibrary }) {
-  const { user, signOut, supabase } = useAuth();
+  const { user, signOut } = useAuth();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNewProject, setShowNewProject] = useState(false);
@@ -2813,21 +2724,15 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
   const duplicateTimestamps = useRef([]); // anti-spam: track last copy times
   const exampleCreatedRef = useRef(false);
 
-  // Load projects from Supabase
+  // Load projects from the server
   useEffect(() => {
     if (!user) return;
-    
+
     const fetchProjects = async () => {
       setLoading(true);
       try {
-        const { data, error } = await supabase
-          .from('projects')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('updated_at', { ascending: false });
-        
-        if (error) throw error;
-        
+        const { projects: data } = await api('/projects');
+
         // Dacă user-ul nu are niciun proiect și nu am creat deja exemplul
         if ((!data || data.length === 0) && !exampleCreatedRef.current) {
           exampleCreatedRef.current = true;
@@ -2839,15 +2744,9 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
             groups: EXAMPLE_PROJECT_DATA.groups,
             manual_layout_positions: EXAMPLE_PROJECT_DATA.manualLayoutPositions,
           };
-          
+
           try {
-            const { data: newProject, error: insertError } = await supabase
-              .from('projects')
-              .insert(exampleProject)
-              .select()
-              .single();
-            
-            if (insertError) throw insertError;
+            const { project: newProject } = await api('/projects', { method: 'POST', body: exampleProject });
             setProjects([newProject]);
           } catch (insertErr) {
             console.error('Error creating example project:', insertErr);
@@ -2865,7 +2764,7 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
     };
     
     fetchProjects();
-  }, [user, supabase]);
+  }, [user?.id]);
 
   const createProject = async () => {
     if (!newProjectName.trim()) return;
@@ -2882,13 +2781,7 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
     };
     
     try {
-      const { data, error } = await supabase
-        .from('projects')
-        .insert(project)
-        .select()
-        .single();
-      
-      if (error) throw error;
+      const { project: data } = await api('/projects', { method: 'POST', body: project });
       setProjects([data, ...projects]);
     } catch (err) {
       console.error('Error creating project:', err);
@@ -2911,12 +2804,7 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
 
   const deleteProject = async (id) => {
     try {
-      const { error } = await supabase
-        .from('projects')
-        .delete()
-        .eq('id', id);
-      
-      if (error) throw error;
+      await api(`/projects/${id}`, { method: 'DELETE' });
     } catch (err) {
       console.error('Error deleting project:', err);
     }
@@ -2952,13 +2840,7 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
     };
     
     try {
-      const { data, error } = await supabase
-        .from('projects')
-        .insert(duplicate)
-        .select()
-        .single();
-      
-      if (error) throw error;
+      const { project: data } = await api('/projects', { method: 'POST', body: duplicate });
       setProjects([data, ...projects]);
     } catch (err) {
       console.error('Error duplicating project:', err);
@@ -3107,7 +2989,6 @@ function ProjectsPage({ onSelectProject, onOpenLibrary }) {
 // ============================================
 
 function MaterialLibrary({ onClose }) {
-  const { supabase } = useAuth();
   const [library, setLibrary] = useState(loadLibrary);
   const [activeTab, setActiveTab] = useState('catalog');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -3121,31 +3002,14 @@ function MaterialLibrary({ onClose }) {
   const [loading, setLoading] = useState(true);
   const saveTimeoutRef = useRef(null);
 
-  // Load library from Supabase on mount
+  // Load library from the server on mount
   useEffect(() => {
     const fetchLibrary = async () => {
-      if (!supabase) {
-        setLoading(false);
-        return;
-      }
-      
       try {
-        const { data, error } = await supabase
-          .from('library')
-          .select('*')
-          .eq('id', 'main')
-          .single();
-        
-        if (error) throw error;
-        
+        const { library: data } = await api('/library');
+
         if (data) {
-          const loadedLibrary = {
-            materialTypes: data.material_types || DEFAULT_LIBRARY.materialTypes,
-            manufacturers: data.manufacturers || DEFAULT_LIBRARY.manufacturers,
-            colors: data.colors || DEFAULT_LIBRARY.colors,
-            formats: data.formats || DEFAULT_LIBRARY.formats,
-            inductionSystems: data.induction_systems || DEFAULT_LIBRARY.inductionSystems,
-          };
+          const loadedLibrary = libraryFromServer(data);
           setLibrary(loadedLibrary);
           // Also save to localStorage as cache
           saveLibrary(loadedLibrary);
@@ -3158,12 +3022,10 @@ function MaterialLibrary({ onClose }) {
     };
     
     fetchLibrary();
-  }, [supabase]);
+  }, []);
 
-  // Save library to Supabase (debounced)
-  const saveLibraryToSupabase = useCallback(async (lib) => {
-    if (!supabase) return;
-    
+  // Save library to the server (debounced)
+  const saveLibraryToServer = useCallback(async (lib) => {
     // Clear previous timeout
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
@@ -3174,19 +3036,16 @@ function MaterialLibrary({ onClose }) {
       setSaveStatus('saving');
       
       try {
-        const { error } = await supabase
-          .from('library')
-          .update({
+        await api('/library', {
+          method: 'PUT',
+          body: {
             material_types: lib.materialTypes,
             manufacturers: lib.manufacturers,
             colors: lib.colors,
             formats: lib.formats,
             induction_systems: lib.inductionSystems,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', 'main');
-        
-        if (error) throw error;
+          },
+        });
         setSaveStatus('saved');
       } catch (err) {
         console.error('Error saving library:', err);
@@ -3195,52 +3054,25 @@ function MaterialLibrary({ onClose }) {
       
       setTimeout(() => setSaveStatus(null), 2000);
     }, 1000);
-  }, [supabase]);
+  }, []);
 
-  // Save to both localStorage and Supabase when library changes
+  // Save to both localStorage and the server when library changes
   useEffect(() => {
     if (loading) return; // Don't save during initial load
-    
-    saveLibrary(library);
-    saveLibraryToSupabase(library);
-  }, [library, loading, saveLibraryToSupabase]);
 
-  // Upload texture to Supabase Storage
+    saveLibrary(library);
+    saveLibraryToServer(library);
+  }, [library, loading, saveLibraryToServer]);
+
+  // Upload texture to the server (R2); the server picks the file name
   const uploadTexture = async (file, colorName) => {
-    if (!supabase) {
-      console.error('Supabase not available');
-      return null;
-    }
-    
     setUploadingTexture(true);
     try {
-      // Generate unique filename
-      const ext = file.name.split('.').pop();
-      const fileName = `${colorName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}.${ext}`;
-      
-      // Upload to Supabase Storage
-      const { data, error } = await supabase.storage
-        .from('Texturi materiale')
-        .upload(fileName, file, {
-          cacheControl: '3600',
-          upsert: false
-        });
-      
-      if (error) {
-        console.error('Upload error:', error);
-        alert('Eroare la upload: ' + error.message);
-        return null;
-      }
-      
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('Texturi materiale')
-        .getPublicUrl(fileName);
-      
-      return publicUrl;
+      const { url } = await api(`/textures?name=${encodeURIComponent(colorName)}`, { method: 'POST', file });
+      return url;
     } catch (err) {
       console.error('Upload error:', err);
-      alert('Eroare la upload textură');
+      alert('Eroare la upload: ' + err.message);
       return null;
     } finally {
       setUploadingTexture(false);
@@ -4155,7 +3987,7 @@ function NumericInput({ value, onChange, step, style, min, max, precision = 0 })
 // ============================================
 
 function Configurator({ project, onBack }) {
-  const { user, supabase } = useAuth();
+  const { user, updatePhone } = useAuth();
   
   // State declarations
   const [library, setLibrary] = useState(loadLibrary);
@@ -4321,28 +4153,14 @@ function Configurator({ project, onBack }) {
     return (el.localRotation || 0) + (groups[el.groupId].rotation || 0);
   };
   
-  // Load library from Supabase
+  // Load library from the server
   useEffect(() => {
     const fetchLibrary = async () => {
-      if (!supabase) return;
-      
       try {
-        const { data, error } = await supabase
-          .from('library')
-          .select('*')
-          .eq('id', 'main')
-          .single();
-        
-        if (error) throw error;
-        
+        const { library: data } = await api('/library');
+
         if (data) {
-          const loadedLibrary = {
-            materialTypes: data.material_types || DEFAULT_LIBRARY.materialTypes,
-            manufacturers: data.manufacturers || DEFAULT_LIBRARY.manufacturers,
-            colors: data.colors || DEFAULT_LIBRARY.colors,
-            formats: data.formats || DEFAULT_LIBRARY.formats,
-            inductionSystems: data.induction_systems || DEFAULT_LIBRARY.inductionSystems,
-          };
+          const loadedLibrary = libraryFromServer(data);
           setLibrary(loadedLibrary);
           
           // Validate materials in project elements (exclude cabinets which don't use library materials)
@@ -4377,7 +4195,7 @@ function Configurator({ project, onBack }) {
     };
     
     fetchLibrary();
-  }, [supabase, project?.elements]);
+  }, [project?.elements]);
   
   // Max undo steps
   const MAX_UNDO_HISTORY = 50;
@@ -4465,7 +4283,7 @@ function Configurator({ project, onBack }) {
   const rawRotationsRef = useRef({});
   const isDraggingRef = useRef(false); // Flag to prevent useEffect overriding positions during drag
 
-  // Auto-save to Supabase (debounced)
+  // Auto-save to the server (debounced)
   useEffect(() => {
     if (!project || !user) return;
     
@@ -4479,43 +4297,10 @@ function Configurator({ project, onBack }) {
       setSaveStatus('saving');
       
       try {
-        // Try saving with all fields first
-        let { error } = await supabase
-          .from('projects')
-          .update({ 
-            elements,
-            groups,
-            manual_layout_positions: manualLayoutPositions,
-            updated_at: new Date().toISOString() 
-          })
-          .eq('id', project.id);
-        
-        // If new columns don't exist, try without them
-        if (error?.code === 'PGRST204' || error?.message?.includes('manual_layout_positions')) {
-          const result = await supabase
-            .from('projects')
-            .update({ 
-              elements,
-              groups,
-              updated_at: new Date().toISOString() 
-            })
-            .eq('id', project.id);
-          error = result.error;
-          
-          // If groups also doesn't exist
-          if (error?.code === 'PGRST204') {
-            const result2 = await supabase
-              .from('projects')
-              .update({ 
-                elements,
-                updated_at: new Date().toISOString() 
-              })
-              .eq('id', project.id);
-            error = result2.error;
-          }
-        }
-        
-        if (error) throw error;
+        await api(`/projects/${project.id}`, {
+          method: 'PATCH',
+          body: { elements, groups, manual_layout_positions: manualLayoutPositions },
+        });
         setSaveStatus('saved');
       } catch (err) {
         console.error('Error saving project:', err);
@@ -9078,7 +8863,7 @@ function Configurator({ project, onBack }) {
         handleElementSelect={handleElementSelect}
         project={project}
         user={user}
-        supabase={supabase}
+        updatePhone={updatePhone}
         canvasRef={canvasRef}
         manualLayoutPositions={manualLayoutPositions}
         setManualLayoutPositions={setManualLayoutPositions}
@@ -9107,7 +8892,7 @@ function Configurator({ project, onBack }) {
 // SLAB CALCULATOR FOOTER COMPONENT
 // ============================================
 
-function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, supabase, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory, selectedCutoutId, setSelectedCutoutId, selectedInductionId, setSelectedInductionId, exportGLB }) {
+function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSelect, project, user, updatePhone, canvasRef, manualLayoutPositions, setManualLayoutPositions, pushManualLayoutToHistory, selectedCutoutId, setSelectedCutoutId, selectedInductionId, setSelectedInductionId, exportGLB }) {
   const [sendingQuote, setSendingQuote] = useState(false);
   const [quoteStatus, setQuoteStatus] = useState(null); // 'success' | 'error' | null
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
@@ -9861,16 +9646,8 @@ function SlabCalculatorFooter({ elements, library, selectedIds, handleElementSel
       // Save phone to profile if user entered it in dialog
       if (tempPhone.trim() && !user?.phone && user?.id) {
         try {
-          await supabase
-            .from('profiles')
-            .upsert({ 
-              id: user.id, 
-              phone: tempPhone.trim() 
-            }, { 
-              onConflict: 'id' 
-            });
-          // Update local user state with new phone
-          // This prevents the phone input from showing again in future dialogs
+          // Also updates the local user, so the phone input doesn't show again
+          await updatePhone(tempPhone.trim());
         } catch (e) {
           console.error('Error saving phone to profile:', e);
         }
